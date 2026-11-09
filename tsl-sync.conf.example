@@ -1,0 +1,19 @@
+# Configuration de tsl-sync — à copier dans /etc/tsl-sync.conf (chmod 600)
+
+# --- Nextcloud ---------------------------------------------------------------
+# Adresse de ton Nextcloud (sans /remote.php...)
+NC_URL="https://cloud.exemple.fr"
+# Ton identifiant Nextcloud
+NC_USER="moi"
+# Mot de passe d'APPLICATION (Nextcloud > Paramètres > Sécurité > "Créer un mot de passe d'application")
+NC_PASS="xxxxx-xxxxx-xxxxx-xxxxx-xxxxx"
+# Dossier de destination dans ton Nextcloud
+NC_DIR="Geometry Dash/TSL"
+
+# --- Options -----------------------------------------------------------------
+# Listes à suivre (noms utilisés dans https://tsl.pages.dev/list/<nom>)
+LISTS="tsl tslplus"
+# Copie locale des fichiers et de l'état
+DATA_DIR="/var/lib/tsl-sync"
+# Pause entre deux requêtes aux serveurs Geometry Dash (secondes) — évite le blocage
+DELAY=2
