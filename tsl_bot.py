@@ -36,7 +36,12 @@ except ImportError:
 log = logging.getLogger("tsl-bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-EMBED_COLOUR = 0x3083F9    # side bar colour of every embed
+EMBED_COLOUR = 0x287DFF    # side bar colour of the embeds (TSL and everything else)
+LIST_COLOURS = {"tslplus": 0x561E1A}   # side bar colour of the embeds about a TSL+ level
+
+
+def list_colour(lst):
+    return LIST_COLOURS.get(lst, EMBED_COLOUR)
 DISCORD_MAX = 1900          # Discord message limit (2000) with a margin
 UPLOAD_MAX = 10 * 1024**2   # max attachment size for a bot
 
@@ -413,7 +418,7 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     deleted = st.get("status") == "deleted"
 
     embed = discord.Embed(title=lv["name"], url=f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}",
-                          colour=EMBED_COLOUR)
+                          colour=list_colour(lv["list"]))
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
@@ -726,7 +731,7 @@ def diff_embed(lv, path, index, total):
     summary, sections = parse_diff(path)
     url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
     info = parse_summary(summary)
-    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=EMBED_COLOUR,
+    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=list_colour(lv["list"]),
                           description=None if info else ("\n".join(summary) or "No details available."))
     if info:
         embed.add_field(name="Objects", value=f"{num(info['before'])} → {num(info['after'])}", inline=True)
@@ -828,17 +833,17 @@ class PagedView(discord.ui.View):
     """An embed split in pages, with First / Previous / Next / Last buttons.
     Only the user who ran the command can use the buttons; they are disabled after 5 minutes."""
 
-    def __init__(self, title, pages, owner_id, command, footer="", url=None):
+    def __init__(self, title, pages, owner_id, command, footer="", url=None, colour=EMBED_COLOUR):
         super().__init__(timeout=300)
         self.title, self.pages, self.owner_id, self.command = title, pages or ["Nothing to show."], owner_id, command
-        self.footer, self.url = footer, url
+        self.footer, self.url, self.colour = footer, url, colour
         self.page = 1
         self.message = None
         self.refresh_buttons()
 
     def embed(self):
         embed = discord.Embed(title=self.title, url=self.url, description=self.pages[self.page - 1],
-                              colour=EMBED_COLOUR)
+                              colour=self.colour)
         footer = f"Page {self.page}/{len(self.pages)}"
         embed.set_footer(text=f"{footer} · {self.footer}" if self.footer else footer)
         return embed
@@ -934,7 +939,8 @@ async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[s
     lines = [f"`#{lv['position']:>3}` [{lv['name']}]({LIST_BASE_URL}/{lv['list']}?level={lv['id']}) "
              f"— {lv['author']}" for lv in levels]
     view = PagedView(name.name, paginate(lines, 25) or ["This list is empty."], interaction.user.id, "/list",
-                     footer=f"{len(levels)} levels", url=f"{LIST_BASE_URL}/{name.value}")
+                     footer=f"{len(levels)} levels", url=f"{LIST_BASE_URL}/{name.value}",
+                     colour=list_colour(name.value))
     await view.send(interaction, page)
 
 
