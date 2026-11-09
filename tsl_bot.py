@@ -182,12 +182,12 @@ def current_progress():
         return None
 
 
-IDLE_ROTATE = 60   # seconds before the idle activity shows another random level
+IDLE_ROTATE = 30 * 60   # seconds before the idle activity shows another random level
 _IDLE = {"text": "", "until": 0.0}
 
 
 def idle_activity_text():
-    """'Shitty NETWORK on TSL': a random level of any list, changed every IDLE_ROTATE seconds."""
+    """'Shitty NETWORK on TSL': a random level of any list, changed every IDLE_ROTATE seconds (30 min)."""
     if _IDLE["text"] and time.time() < _IDLE["until"]:
         return _IDLE["text"]
     levels = load_index()
