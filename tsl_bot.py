@@ -405,18 +405,58 @@ async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[s
     view.message = await interaction.original_response()
 
 
+def last_run_counts():
+    """('2026-11-10 04:52', {'new': 0, 'modified': 1, ...}) from last_run.txt, or (None, {})."""
+    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d) — (.*)", last_run_line())
+    if not m:
+        return None, {}
+    return m.group(1), {k.strip(): int(v) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(2))}
+
+
+def last_run_modified():
+    return [row for row in read_tsv(DATA_DIR / "last_run_modified.tsv") if len(row) >= 3]
+
+
 @bot.tree.command(name="status", description="Result of the last tsl-sync run")
 async def cmd_status(interaction: discord.Interaction):
-    last = last_run_line() or "No run recorded yet."
     step = current_progress()
+    when, counts = last_run_counts()
     state = load_state()
-    deleted = sum(1 for s in state.values() if s["status"] == "deleted")
     index = load_index()
-    counts = ", ".join(f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS)
-    await interaction.response.send_message(
-        f"**Run in progress**: {step if step else 'no'}\n"
-        f"**Last run**: {last}\n**Tracked levels**: {counts}\n"
-        f"**Deleted from the GD servers**: {deleted}")
+
+    embed = discord.Embed(title="TSL status", colour=0xF1C40F if step else 0x2ECC71)
+    embed.add_field(name="Current run", value=step or "✅ Idle", inline=False)
+    if when:
+        embed.add_field(name="Last run", value=when, inline=False)
+        for key, label in (("new", "New"), ("modified", "Modified"), ("info changed", "Info changed"),
+                           ("deleted", "Deleted"), ("unchanged", "Unchanged"), ("failed", "Failed")):
+            embed.add_field(name=label, value=str(counts.get(key, 0)), inline=True)
+    else:
+        embed.add_field(name="Last run", value="No run recorded yet.", inline=False)
+
+    modified = last_run_modified()
+    if when:
+        if modified:
+            lines = [f"[{name}]({LIST_BASE_URL}/{lst}?level={lid}) ({LIST_NAMES.get(lst, lst)})"
+                     for lst, lid, name in (row[:3] for row in modified)]
+            value = ""
+            for i, line in enumerate(lines):
+                rest = len(lines) - i
+                if len(value) + len(line) + 1 > 1000:
+                    value += f"\n… and {rest} more"
+                    break
+                value += ("\n" if value else "") + line
+        elif not (DATA_DIR / "last_run_modified.tsv").exists():
+            value = "Shown after the next run"
+        else:
+            value = "None"
+        embed.add_field(name="Modified levels (last run)", value=value, inline=False)
+
+    embed.add_field(name="Tracked levels", inline=False, value="\n".join(
+        f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS))
+    embed.add_field(name="Deleted from the GD servers", inline=False,
+                    value=str(sum(1 for s in state.values() if s["status"] == "deleted")))
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="check", description="Start a check run now")
