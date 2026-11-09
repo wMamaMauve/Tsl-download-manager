@@ -58,6 +58,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 | `/changes [days]` | what changed in the last days |
 | `/list <tsl\|tslplus> [page]` | the ranking, 25 levels per page, with First / Previous / Next / Last buttons |
 | `/status` | result of the last run |
+| `/help` | every command and what it does (only visible to you; click a command to use it) |
 | `/video <link>` | which levels and players use a video (paste a YouTube, Medal, Drive… link or a YouTube ID): title, level, creator, list position, player, whether the video still works, whether it is a duplicate or possibly on the wrong level (with a **Validate** button) |
 | `/records [level] [show]` | verification, showcase and record videos that can no longer be watched (private, deleted…), with a link and since when; with `show: Duplicate videos`, the videos given for different players or listed twice; with `show: Wrong level`, the records whose video title names another level; with `show: Checked by hand`, who validated what and when |
 | `/run [what]` | (admins) start a run now: **levels and record videos** (default), **levels only** (re-downloads every level, ~35 min) or **record videos only** (checks every video again, ~20 min) |

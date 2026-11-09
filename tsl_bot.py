@@ -321,9 +321,10 @@ class TSLBot(discord.Client):
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
+            synced = await self.tree.sync(guild=guild)
         else:
-            await self.tree.sync()
+            synced = await self.tree.sync()
+        COMMAND_IDS.update({c.name: c.id for c in synced})   # clickable command mentions in /help
         self.add_dynamic_items(CopyIdButton, ValidateNameButton)   # buttons keep working after a restart
         self.loop.create_task(self.notification_loop())
 
@@ -420,6 +421,8 @@ def announcement_embeds(lines):
         embeds[-1].set_footer(text=re.sub(r"\d{4,}", lambda m: num(m.group(0)), summary)[:2048])
     return embeds
 
+
+COMMAND_IDS = {}   # command name -> Discord ID (filled when the commands are synced)
 
 bot = TSLBot()
 
@@ -1445,6 +1448,56 @@ async def cmd_run(interaction: discord.Interaction, what: app_commands.Choice[st
         (DATA_DIR / "next_run_mode").unlink(missing_ok=True)
         await interaction.response.send_message(f"Could not start the run: {res.stderr.strip()[:500]}",
                                                 ephemeral=True)
+
+
+HELP_SECTIONS = [
+    ("Levels", [
+        ("level", "<name or id>", "Info about a level: creator, position, verification and showcase videos, "
+                                  "latest changes, and its **.gmd file**. *Copy ID* button."),
+        ("diff", "<name or id>", "What changed the last time a level was modified: objects added / removed / "
+                                 "moved (with pictures), where in the level, settings. Buttons to go through "
+                                 "older changes; the full list is attached."),
+        ("list", "<list> [page]", "The ranking of TSL or TSL+, 25 levels per page."),
+        ("changes", "[days] [everything]", "What changed in the last days (7 by default). "
+                                           "`everything: True` also shows the ranking moves."),
+    ]),
+    ("Record videos", [
+        ("records", "[level] [show]", "Videos with a problem. `show`: **Unavailable** (private, deleted…, default), "
+                                      "**Duplicate videos**, **Wrong level** (the title names another level), "
+                                      "**Checked by hand** (who validated what, and when)."),
+        ("video", "<link>", "Which levels and players use a video (YouTube, Medal, Drive… link or YouTube ID), its "
+                            "title and whether it works. A **Validate** button (server managers) clears a "
+                            "wrong-level report."),
+    ]),
+    ("Tracking", [
+        ("status", "", "The last run: new / modified / deleted levels, unavailable and duplicate videos, "
+                       "tracked levels, and the run in progress."),
+        ("run", "[what]", "*(server managers)* Start a run now: **levels and record videos** (default), "
+                          "**levels only** (~35 min) or **record videos only** (~20 min). Always posts its result."),
+        ("help", "", "This message."),
+    ]),
+]
+
+
+def command_mention(name):
+    cid = COMMAND_IDS.get(name)
+    return f"</{name}:{cid}>" if cid else f"`/{name}`"
+
+
+@bot.tree.command(name="help", description="What the bot does and how to use its commands")
+async def cmd_help(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="List Manager — help", colour=EMBED_COLOUR,
+        description="I follow **The Shitty List** (TSL and TSL+) every night: I download every level, look "
+                    "for changes, and check that every verification, showcase and record video still works. "
+                    "Changes are posted here as **TSL Levels Tracking result** and **TSL Records Tracking "
+                    "result** (the nightly run only posts when something changed).\n"
+                    "`<…>` = required, `[…]` = optional. Click a command to use it.")
+    for section, commands in HELP_SECTIONS:
+        lines = [f"{command_mention(name)} {args}".rstrip() + f" — {text}" for name, args, text in commands]
+        embed.add_field(name=section, value="\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="Levels and their .gmd files are also in Nextcloud, with every log.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def main():
