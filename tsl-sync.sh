@@ -258,7 +258,8 @@ fi
 # ---------------------------------------------------------------- Discord
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"      # Discord webhook URL (empty = disabled)
 DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"  # if set, announcements are posted by the bot (tsl_bot.py)
-notify() { printf '%s\n' "$*" >> "$TMP/discord.txt"; }
+notify() { printf '%s\n' "$*" >> "$TMP/discord.txt"; }              # level announcements
+notify_rec() { printf '%s\n' "$*" >> "$TMP/discord_records.txt"; }  # record video announcements
 
 json_string() {  # escapes text for JSON (stdin -> stdout, with quotes)
     awk 'BEGIN { printf "\"" }
@@ -282,31 +283,31 @@ discord_post() {  # discord_post <text>
     return 1
 }
 
-bot_queue() {  # leaves the announcements for the Discord bot
+bot_queue() {  # bot_queue <title> <announcements file> <summary> <order>: leaves them for the Discord bot
     [ -n "$DISCORD_BOT_TOKEN" ] || return 0
-    [ -s "$TMP/discord.txt" ] || [ "$DISCORD_ALWAYS" = 1 ] || return 0
+    [ -s "$2" ] || [ "$DISCORD_ALWAYS" = 1 ] || return 0
     mkdir -p "$DATA_DIR/notifications"
-    local f="$DATA_DIR/notifications/$(date +%Y%m%d-%H%M%S)-$$"
-    { printf '**TSL** — run of %s\n' "$(date '+%Y-%m-%d %H:%M')"
-      if [ -s "$TMP/discord.txt" ]; then cat "$TMP/discord.txt"; else echo "✅ No changes were detected."; fi
-      printf '_%s_\n' "$1"; } > "$f.tmp" && mv "$f.tmp" "$f.txt"
+    local f="$DATA_DIR/notifications/$(date +%Y%m%d-%H%M%S)-$$-$4"
+    { printf '**%s** — run of %s\n' "$1" "$(date '+%Y-%m-%d %H:%M')"
+      if [ -s "$2" ]; then cat "$2"; else echo "✅ No changes were detected."; fi
+      printf '_%s_\n' "$3"; } > "$f.tmp" && mv "$f.tmp" "$f.txt"
 }
 
-discord_send() {  # sends the collected announcements, in messages under 2000 characters
-    bot_queue "$1"
+discord_send() {  # discord_send <title> <announcements file> <summary> <order>: in messages under 2000 characters
+    bot_queue "$@"
     [ -n "$DISCORD_WEBHOOK" ] || return 0
-    local summary="$1" msg line
-    if [ ! -s "$TMP/discord.txt" ]; then
-        [ "$DISCORD_ALWAYS" = 1 ] && discord_post "**TSL Tracking result**"$'\n'"✅ No changes were detected."
+    local title="$1" file="$2" msg line
+    if [ ! -s "$file" ]; then
+        [ "$DISCORD_ALWAYS" = 1 ] && discord_post "**$title**"$'\n'"✅ No changes were detected."
         return 0
     fi
-    msg="**TSL Tracking result**"
+    msg="**$title**"
     while IFS= read -r line; do
         if [ $(( ${#msg} + ${#line} + 1 )) -gt 1900 ]; then discord_post "$msg"; msg=""; fi
         msg="${msg:+$msg$'\n'}$line"
-    done < "$TMP/discord.txt"
+    done < "$file"
     discord_post "$msg"
-    log "Discord announcements sent"
+    log "Discord announcements sent ($title)"
 }
 
 # ---------------------------------------------------------------- state
@@ -539,11 +540,12 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
     done | awk -F'\t' '!($2 in owner) { owner[$2] = $1 } owner[$2] == $1' > "$TMP/videos.tsv"
     RECORDS_UNAV="$DATA_DIR/records_unavailable.tsv"
     if bash "$RECORD_TOOL" "$TMP/videos.tsv" "$DATA_DIR/records_state.tsv" "$RECORDS_UNAV" > "$TMP/videos.changes"; then
+        VIDEOS_CHECKED=1
         total_videos=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
         log "  $total_videos videos, $unav unavailable"
         if grep -qx FIRST "$TMP/videos.changes"; then
             note "VIDEOS: first check, $unav of $total_videos level videos are unavailable"
-            [ "$unav" -gt 0 ] && notify "First check of the level videos: **$unav** verification / showcase / record videos are unavailable. Use \`/records\` to see them."
+            [ "$unav" -gt 0 ] && notify_rec "First check of the level videos: **$unav** verification / showcase / record videos are unavailable. Use \`/records\` to see them."
         fi
         for kind in DOWN UP; do
             n=0
@@ -552,21 +554,23 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
                 n=$((n + 1))
                 if [ "$kind" = DOWN ]; then
                     note "[$vlst] VIDEO UNAVAILABLE ($(status_label "$status")): $vname ($vid) — $(video_label "$vkind" "$vuser") $vlink"
-                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify "[$vlst] **Video unavailable** ($(status_label "$status")): [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
+                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify_rec "[$vlst] **Video unavailable** ($(status_label "$status")): [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
                 else
                     note "[$vlst] VIDEO AVAILABLE AGAIN: $vname ($vid) — $(video_label "$vkind" "$vuser") $vlink"
-                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify "[$vlst] **Video available again**: [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
+                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify_rec "[$vlst] **Video available again**: [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
                 fi
             done < "$TMP/videos.changes"
             if [ "$n" -gt "$RECORD_ANNOUNCE_MAX" ]; then
-                if [ "$kind" = DOWN ]; then notify "…and $((n - RECORD_ANNOUNCE_MAX)) more unavailable videos (\`/records\` lists them all)."
-                else notify "…and $((n - RECORD_ANNOUNCE_MAX)) more videos available again."; fi
+                if [ "$kind" = DOWN ]; then notify_rec "…and $((n - RECORD_ANNOUNCE_MAX)) more unavailable videos (\`/records\` lists them all)."
+                else notify_rec "…and $((n - RECORD_ANNOUNCE_MAX)) more videos available again."; fi
             fi
         done
         { printf 'list\tid\tlevel\tkind\tplayer\tlink\tstatus\tsince\n'; cat "$RECORDS_UNAV"; } > "$FILES/unavailable_videos.tsv"
         nc_put "unavailable_videos.tsv"
     else
         log "  video check failed (will be retried on the next run)"
+        VIDEOS_CHECKED=1
+        notify_rec "The video check failed; it will be retried on the next run."
     fi
 fi
 
@@ -599,15 +603,15 @@ if [ -n "$DISCORD_BOT_TOKEN" ] && [ -s "$TMP/modified.tsv" ]; then
     notify ""
     notify "Use \`/diff $(head -1 "$TMP/modified.tsv" | cut -f3)\` to see what changed in a level."
 fi
-if [ "$RUN_MODE" = records ]; then
-    # videos only: /status keeps showing the numbers of the last level run
-    summary="record videos only: ${total_videos:-0} videos checked, ${unav:-0} unavailable"
-    discord_send "$summary"
-else
-    discord_send "$summary"
+# one announcement for the levels, one for the record videos
+[ "$RUN_MODE" = records ] || discord_send "TSL Levels Tracking result" "$TMP/discord.txt" "$summary" 1
+[ "${VIDEOS_CHECKED:-0}" = 1 ] && discord_send "TSL Records Tracking result" "$TMP/discord_records.txt" \
+    "${total_videos:-0} videos, ${unav:-0} unavailable" 2
+if [ "$RUN_MODE" != records ]; then   # videos only: /status keeps showing the numbers of the last level run
     printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
     # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)
     if [ -s "$TMP/modified.tsv" ]; then cp "$TMP/modified.tsv" "$DATA_DIR/last_run_modified.tsv"; else : > "$DATA_DIR/last_run_modified.tsv"; fi
 fi
-log "Done: $summary"
+if [ "$RUN_MODE" = records ]; then log "Done: ${total_videos:-0} videos, ${unav:-0} unavailable"
+else log "Done: $summary"; fi
 [ "$failed" -eq 0 ]

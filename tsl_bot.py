@@ -382,13 +382,16 @@ NO_CHANGES = "✅ No changes were detected."
 def announcement_embeds(lines):
     """Turns a notification file (title line, change lines, '_summary_' line) into embeds.
     The title and summary lines written by tsl-sync.sh are not shown."""
-    body = []
+    body, title = [], ANNOUNCE_TITLE
     for line in lines:
         line = OLD_EMOJIS.sub("", line.strip())
         if not line:
             continue
         if "run of" in line and line.replace("*", "").startswith("TSL"):
-            continue   # "TSL — run of <date>": replaced by a fixed title
+            m = re.match(r"^\*\*(TSL .+?)\*\* — run of", line)
+            if m:   # "**TSL Levels Tracking result** — run of <date>"
+                title = m.group(1)
+            continue   # older files: "**TSL** — run of <date>", shown with the default title
         if line.startswith("_") and line.endswith("_") and len(line) > 2:
             continue   # summary line ("0 new, 1 modified, ...")
         if line in ("✅ No changes.", "No changes.", NO_CHANGES):
@@ -396,7 +399,6 @@ def announcement_embeds(lines):
         body.append(re.sub(r"\s*\(v\d+\s*→\s*v\d+\)", "", line))   # old "(v2 → v3)"
     if not body:
         body = [NO_CHANGES]
-    title = ANNOUNCE_TITLE
 
     chunks, current = [], ""
     for line in body:
