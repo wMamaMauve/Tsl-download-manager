@@ -34,5 +34,5 @@ DISCORD_CHANNEL_ID=""
 DISCORD_GUILD_ID=""
 # Alternative without a bot: Discord webhook URL (announcements only)
 DISCORD_WEBHOOK=""
-# 1 = also post a message when nothing changed
-DISCORD_ALWAYS=0
+# 1 = also post a message at the end of a run when nothing changed (0 = only when something changed)
+DISCORD_ALWAYS=1

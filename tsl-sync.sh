@@ -231,7 +231,7 @@ fi
 # ---------------------------------------------------------------- Discord
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"      # Discord webhook URL (empty = disabled)
 DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"  # if set, announcements are posted by the bot (tsl_bot.py)
-DISCORD_ALWAYS="${DISCORD_ALWAYS:-0}"       # 1 = also post a summary when nothing changed
+DISCORD_ALWAYS="${DISCORD_ALWAYS:-1}"       # 1 = also post a summary when nothing changed (0 = only when something changed)
 notify() { printf '%s\n' "$*" >> "$TMP/discord.txt"; }
 
 json_string() {  # escapes text for JSON (stdin -> stdout, with quotes)
