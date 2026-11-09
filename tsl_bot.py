@@ -341,6 +341,20 @@ def announcement_embeds(lines):
 bot = TSLBot()
 
 
+@bot.tree.error
+async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Any error in a command: log it and tell the user, instead of 'The application did not respond'."""
+    log.error("error in /%s", interaction.command.name if interaction.command else "?", exc_info=error)
+    message = "Something went wrong with this command. The details are in the bot's log (journalctl -u tsl-bot)."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
 async def level_autocomplete(_interaction, current):
     levels = find_levels(current) if current else load_index()[:25]
     return [app_commands.Choice(name=f"{lv['name']} — {lv['list']} #{lv['position']}"[:100], value=lv["id"])
@@ -508,15 +522,17 @@ def short_object(line):
 @app_commands.describe(query="Name, creator or ID of the level")
 @app_commands.autocomplete(query=level_autocomplete)
 async def cmd_diff(interaction: discord.Interaction, query: str):
+    # answer Discord right away ("thinking…"): reading or computing the diff may take a moment
+    await interaction.response.defer(thinking=True)
+    send = interaction.followup.send
     matches = find_levels(query)
     if not matches:
-        await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+        await send(f"No level found for “{query}”.")
         return
     lv = next((x for x in matches if x["id"] == query), matches[0])
     if len(matches) > 1 and lv["id"] != query and lv["name"].lower() != query.strip().lower():
         lines = [f"• **{x['name']}** by {x['author']} (`{x['id']}`)" for x in matches[:15]]
-        await interaction.response.send_message(
-            f"{len(matches)} levels match, please be more specific:\n" + "\n".join(lines), ephemeral=True)
+        await send(f"{len(matches)} levels match, please be more specific:\n" + "\n".join(lines))
         return
     diffs = level_diffs(lv["id"])
     url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
@@ -526,14 +542,12 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
         old_gmd = latest_history_gmd(lv["id"])
         current = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
         if old_gmd and current and current.is_file() and DIFF_TOOL.is_file():
-            await interaction.response.defer(thinking=True)
             made = await asyncio.to_thread(compute_diff, lv, old_gmd, current)
             if made:
                 diffs = [made]
-    send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
     if not diffs:
         await send(f"No recorded changes for **[{lv['name']}](<{url}>)** yet: a comparison is made the next time "
-                   "the level is modified.", ephemeral=True)
+                   "the level is modified.")
         return
 
     latest = diffs[0]
