@@ -550,11 +550,23 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
                    "the level is modified.")
         return
 
-    latest = diffs[0]
-    summary, sections = parse_diff(latest)
+    view = DiffView(lv, diffs, interaction.user.id)
+    embed, file = view.render()
+    kwargs = {"embed": embed, "view": view} if len(diffs) > 1 else {"embed": embed}
+    if file:
+        kwargs["file"] = file
+    else:
+        kwargs["content"] = "_(full list too large for Discord, see Nextcloud)_"
+    view.message = await send(wait=True, **kwargs)
+
+
+def diff_embed(lv, path, index, total):
+    """Embed and attachment for one diff file of a level (index 0 = newest)."""
+    summary, sections = parse_diff(path)
+    url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
     embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=EMBED_COLOUR,
                           description="\n".join(summary) or "No details available.")
-    embed.add_field(name="Changed on", value=discord_time(latest.name[:10], "D"), inline=True)
+    embed.add_field(name="Changed on", value=discord_time(path.name[:10], "D"), inline=True)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     preview = []
     for key in ("ADDED", "REMOVED", "MOVED"):
@@ -565,16 +577,72 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
     if sections.get("SETTINGS"):
         embed.add_field(name="Settings", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
                         inline=False)
-    if len(diffs) > 1:
-        older = ", ".join(discord_time(d, "D") for d in sorted({p.name[:10] for p in diffs[1:]}, reverse=True)[:10])
-        embed.add_field(name="Earlier changes", value=older, inline=False)
-    embed.set_footer(text="The attached file lists every added, removed and moved object.")
+    where = "" if total == 1 else (" (newest)" if index == 0 else (" (oldest)" if index == total - 1 else ""))
+    embed.set_footer(text=f"Change {index + 1}/{total}{where} · "
+                          "the attached file lists every added, removed and moved object")
+    file = None
+    if path.stat().st_size <= UPLOAD_MAX:
+        filename = re.sub(r'[\\/:*?"<>|]', "_", f"{lv['name']} - changes {path.name[:10]}.txt")
+        file = discord.File(path, filename=filename)
+    return embed, file
 
-    if latest.stat().st_size <= UPLOAD_MAX:
-        filename = re.sub(r'[\\/:*?"<>|]', "_", f"{lv['name']} - changes {latest.name[:10]}.txt")
-        await send(embed=embed, file=discord.File(latest, filename=filename))
-    else:
-        await send(content="_(full list too large for Discord, see Nextcloud)_", embed=embed)
+
+class DiffView(discord.ui.View):
+    """Buttons to browse the successive changes of a level (only for the user who ran /diff)."""
+
+    def __init__(self, lv, diffs, owner_id):
+        super().__init__(timeout=300)
+        self.lv, self.diffs, self.owner_id = lv, diffs, owner_id
+        self.index = 0   # 0 = newest
+        self.message = None
+        self.refresh_buttons()
+
+    def render(self):
+        return diff_embed(self.lv, self.diffs[self.index], self.index, len(self.diffs))
+
+    def refresh_buttons(self):
+        self.newest.disabled = self.newer.disabled = self.index <= 0
+        self.older.disabled = self.oldest.disabled = self.index >= len(self.diffs) - 1
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message("These buttons belong to whoever used /diff — "
+                                                "run /diff yourself to browse.", ephemeral=True)
+        return False
+
+    async def show(self, interaction, index):
+        self.index = min(max(index, 0), len(self.diffs) - 1)
+        self.refresh_buttons()
+        embed, file = self.render()
+        await interaction.response.edit_message(
+            embed=embed, view=self, attachments=[file] if file else [],
+            content=None if file else "_(full list too large for Discord, see Nextcloud)_")
+
+    @discord.ui.button(label="Newest", style=discord.ButtonStyle.secondary)
+    async def newest(self, interaction, _button):
+        await self.show(interaction, 0)
+
+    @discord.ui.button(label="Newer", style=discord.ButtonStyle.primary)
+    async def newer(self, interaction, _button):
+        await self.show(interaction, self.index - 1)
+
+    @discord.ui.button(label="Older", style=discord.ButtonStyle.primary)
+    async def older(self, interaction, _button):
+        await self.show(interaction, self.index + 1)
+
+    @discord.ui.button(label="Oldest", style=discord.ButtonStyle.secondary)
+    async def oldest(self, interaction, _button):
+        await self.show(interaction, len(self.diffs) - 1)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class PagedView(discord.ui.View):
