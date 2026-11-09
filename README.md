@@ -53,7 +53,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 
 | Command | What it does |
 |---|---|
-| `/level <name or id>` | level info, latest changes, GDBrowser link **and the .gmd file as an attachment** |
+| `/level <name or id>` | level info, latest changes, link to the level on the list site, its verification video **and the .gmd file as an attachment** |
 | `/changes [days]` | what changed in the last days |
 | `/list <tsl\|tslplus> [page]` | the ranking |
 | `/status` | result of the last run |

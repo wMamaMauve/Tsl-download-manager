@@ -395,7 +395,8 @@ info_diff() {  # info_diff <old> <new> -> labels of the changed fields, separate
         for (i = 1; i <= nb; i++) { p = index(b[i], "="); if (p) { k = substr(b[i], 1, p - 1); ob[k] = substr(b[i], p + 1); keys[k] = 1 } }
         for (k in keys) if (oa[k] != ob[k]) print k }' | while read -r k; do info_label "$k"; done | sort -u | paste -sd, - | sed 's/,/, /g'
 }
-gdlink() { printf '[%s](<https://gdbrowser.com/%s>)' "$1" "$2"; }
+# link to the level's page on the list site: <LIST_BASE_URL>/<list>?level=<id>
+gdlink() { printf '[%s](<%s/%s?level=%s>)' "$1" "${LIST_BASE_URL%/}" "$lst" "$2"; }
 
 new=0; updated=0; infos=0; same=0; failed=0; deleted=0; n_done=0; total=${#ORDER[@]}
 log "Full check of $total levels (data downloaded and compared)"

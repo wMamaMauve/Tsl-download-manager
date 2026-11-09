@@ -66,6 +66,7 @@ def first_existing(*paths):
 
 DATA_DIR = Path(setting("DATA_DIR", "/var/lib/tsl-sync"))
 LISTS = setting("LISTS", "tsl tslplus").split()
+LIST_BASE_URL = setting("LIST_BASE_URL", "https://tsl.pages.dev/list").rstrip("/")
 TOKEN = setting("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(setting("DISCORD_CHANNEL_ID", "0") or 0)
 GUILD_ID = int(setting("DISCORD_GUILD_ID", "0") or 0)
@@ -272,7 +273,7 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     history = [short_log_line(line) for line in load_log() if f"({lv['id']})" in line][-6:]
     deleted = st.get("status") == "deleted"
 
-    embed = discord.Embed(title=lv["name"], url=f"https://gdbrowser.com/{lv['id']}",
+    embed = discord.Embed(title=lv["name"], url=f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}",
                           colour=0xE74C3C if deleted else 0x3498DB)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
