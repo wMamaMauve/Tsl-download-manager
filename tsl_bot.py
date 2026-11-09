@@ -187,6 +187,26 @@ def current_progress():
         return None
 
 
+def last_run_line():
+    path = first_existing(DATA_DIR / "last_run.txt", DATA_DIR / "dernier_passage.txt")
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def last_run_counts():
+    """('2026-11-10 04:52', {'new': 0, 'modified': 1, ...}) from last_run.txt, or (None, {})."""
+    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d) — (.*)", last_run_line())
+    if not m:
+        return None, {}
+    return m.group(1), {k.strip(): int(v) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(2))}
+
+
+def last_run_modified():
+    return [row for row in read_tsv(DATA_DIR / "last_run_modified.tsv") if len(row) >= 3]
+
+
 IDLE_ROTATE = 30 * 60   # seconds before the idle activity shows another random level
 # Shown at least once a day each, at a random time of the day, for one IDLE_ROTATE period.
 DAILY_ACTIVITIES = [("watching", "Dylan"), ("playing", "Evo")]
@@ -548,11 +568,6 @@ def compute_diff(lv, old_gmd, current):
     return out if out.is_file() else None
 
 
-def short_object(line):
-    """'+ id 1 at x=54077 y=255   [1,1,...]' -> '+ id 1 at x=54077 y=255'"""
-    return re.sub(r"\s+\[.*\]$", "", line)
-
-
 @bot.tree.command(name="diff", description="What changed in a level the last time it was modified")
 @app_commands.describe(query="Name, creator or ID of the level")
 @app_commands.autocomplete(query=level_autocomplete)
@@ -729,9 +744,8 @@ def objects_image(path, sections):
 def diff_embed(lv, path, index, total):
     """Embed and attachments for one diff file of a level (index 0 = newest)."""
     summary, sections = parse_diff(path)
-    url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
     info = parse_summary(summary)
-    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=list_colour(lv["list"]),
+    embed = discord.Embed(title=f"Changes in {lv['name']}", colour=list_colour(lv["list"]),
                           description=None if info else ("\n".join(summary) or "No details available."))
     if info:
         embed.add_field(name="Objects", value=f"{num(info['before'])} → {num(info['after'])}", inline=True)
@@ -750,12 +764,6 @@ def diff_embed(lv, path, index, total):
                             inline=False)
     embed.add_field(name="Changed on", value=discord_time(path.name[:10], "D"), inline=True)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
-    preview = []
-    for key in ("ADDED", "REMOVED", "MOVED"):
-        preview += [short_object(x) for x in sections.get(key, [])[:4]]
-    if preview:
-        embed.add_field(name="First changed objects", value="```\n" + "\n".join(preview)[:990] + "\n```",
-                        inline=False)
     where = "" if total == 1 else (" (newest)" if index == 0 else (" (oldest)" if index == total - 1 else ""))
     embed.set_footer(text=f"Change {index + 1}/{total}{where} · "
                           "the attached file lists every added, removed and moved object")
