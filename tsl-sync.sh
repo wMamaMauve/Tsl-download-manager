@@ -335,7 +335,7 @@ for lst in $LISTS; do
     old_index="$FILES/$lst/index.tsv"
     if [ -f "$old_index" ]; then  # ranking changes
         awk -F'\t' -v L="$lst" '
-            NR == FNR { if (FNR > 1) { op[$2] = $1; on[$2] = $3 } next }
+            FILENAME == ARGV[1] { if (FNR > 1) { op[$2] = $1; on[$2] = $3 } next }
             FNR > 1 { seen[$2] = 1
                 if (!($2 in op)) printf "[%s] ENTERED the list: #%s %s (%s)\n", L, $1, $3, $2
                 else if (op[$2] != $1) printf "[%s] RANKING: %s (%s) #%s -> #%s\n", L, $3, $2, op[$2], $1 }
@@ -452,7 +452,8 @@ for id in "${ORDER[@]}"; do
         # object-level comparison of the two versions (level_diff.sh)
         diff_log=""; : > "$TMP/diff.msg"
         diffrel="history/$(safe_name "$name") ($id)/${DAY}_v${ST_VER[$id]}_to_v${ver}_diff.txt"
-        if [ -x "$DIFF_TOOL" ] && "$DIFF_TOOL" "$FILES/$old" "$TMP/level.gmd" "$FILES/$diffrel" > "$TMP/diff.out" 2>/dev/null; then
+        if [ -x "$DIFF_TOOL" ] && OLD_LABEL="$name ($id) v${ST_VER[$id]}" NEW_LABEL="$name ($id) v$ver, downloaded $DAY" \
+            "$DIFF_TOOL" "$FILES/$old" "$TMP/level.gmd" "$FILES/$diffrel" > "$TMP/diff.out" 2>/dev/null; then
             diff_log="$(awk -F'\t' '$1 == "LOG" { print $2; exit }' "$TMP/diff.out")"
             awk -F'\t' '$1 == "MSG" { print "- " $2 }' "$TMP/diff.out" > "$TMP/diff.msg"
             nc_put "$diffrel"

@@ -10,6 +10,7 @@
 # moved objects to that file.
 # Exit code: 0 = compared, 1 = level data could not be decoded.
 #
+# OLD_LABEL / NEW_LABEL (environment) replace the file names in the detail file.
 # Dependencies: awk, sort, comm, base64, gzip.
 
 set -u -o pipefail
@@ -80,7 +81,7 @@ awk -F'\t' -v MAX="${MOVE_MAX:-600}" '
         return s
     }
     function bucket(x) { return int((x + 0) / MAX) }
-    NR == FNR {
+    FILENAME == ARGV[1] {
         r = rest($0); parse($0); nrem++
         rl[nrem] = $0; rx[nrem] = o["2"] + 0; ry[nrem] = o["3"] + 0; rid[nrem] = o["1"]
         b = r SUBSEP bucket(o["2"]); bn[b]++; bk[b, bn[b]] = nrem
@@ -169,7 +170,7 @@ settings=$(awk -F'\t' '
         if (k == "kA17") return "ground line"; if (k == "kA18") return "font"
         return "setting " k
     }
-    NR == FNR { o[$1] = $2; keys[$1] = 1; next }
+    FILENAME == ARGV[1] { o[$1] = $2; keys[$1] = 1; next }
     { n[$1] = $2; keys[$1] = 1 }
     END { for (k in keys) if (o[k] != n[k]) print label(k) }' "$T/old.hdr" "$T/new.hdr" | sort -u | paste -sd, - | sed 's/,/, /g')
 
@@ -198,8 +199,8 @@ fi
 if [ -n "$DETAIL" ]; then
     {
         echo "Level diff"
-        echo "  old: $OLD"
-        echo "  new: $NEW"
+        echo "  old: ${OLD_LABEL:-$OLD}"
+        echo "  new: ${NEW_LABEL:-$NEW}"
         echo
         echo "$log_line"
         echo
@@ -213,7 +214,7 @@ if [ -n "$DETAIL" ]; then
         awk -F'\t' '$1 == "M" { printf "  ~ id %s from x=%s y=%s to x=%s y=%s   [%s]\n", $2, $5, $6, $3, $4, $7 }' "$T/changes"
         if [ -n "$settings" ]; then
             echo; echo "SETTINGS"
-            awk -F'\t' 'NR == FNR { o[$1] = $2; k[$1] = 1; next } { n[$1] = $2; k[$1] = 1 }
+            awk -F'\t' 'FILENAME == ARGV[1] { o[$1] = $2; k[$1] = 1; next } { n[$1] = $2; k[$1] = 1 }
                 END { for (x in k) if (o[x] != n[x]) printf "  %s: %s -> %s\n", x, o[x], n[x] }' "$T/old.hdr" "$T/new.hdr"
         fi
     } > "$DETAIL"
