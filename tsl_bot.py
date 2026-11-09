@@ -174,7 +174,7 @@ def presence_text():
     last = last_run_line()
     m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d) — (.*)", last)
     if not m:
-        return "⏸️ Waiting for the first run"
+        return "Waiting for the first run"
     counts = dict((k.strip(), int(v)) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(3)))
     parts = [f"{counts[k]} {k}" for k in ("modified", "info changed", "deleted", "new") if counts.get(k)]
     return f"✅ Last run {m.group(1)} {m.group(2)} · {', '.join(parts) if parts else 'no changes'}"
@@ -277,7 +277,7 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
     embed.add_field(name="Version", value=st.get("version") or "?", inline=True)
-    embed.add_field(name="Status", value="🗑️ deleted from the GD servers (copy kept)" if deleted else "✅ online",
+    embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
                     inline=True)
     if history:
         embed.add_field(name="Latest changes", value="\n".join(history)[:1024], inline=False)
@@ -348,7 +348,7 @@ async def cmd_check(interaction: discord.Interaction):
                          check=False)
     if res.returncode == 0:
         await interaction.response.send_message(
-            "⏳ Run started (about 35 min). Changes will be announced here when it is done.")
+            "Run started (about 35 min). Changes will be announced here when it is done.")
     else:
         await interaction.response.send_message(f"Could not start the run: {res.stderr.strip()[:500]}",
                                                 ephemeral=True)

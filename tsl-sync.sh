@@ -28,6 +28,7 @@ DAILY="${DAILY:-1}"              # 1 = one folder per day (YYYY-MM-DD) with the 
 RESYNC="${RESYNC:-0}"            # 1 = re-upload every local file to Nextcloud
 GMD_BINARY_VERSION="${GMD_BINARY_VERSION:-47}"  # game save format version (key k50, 47 = GD 2.2)
 AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
+DIFF_TOOL="${DIFF_TOOL:-$SCRIPT_DIR/level_diff.sh}"   # object-level comparison of two versions
 
 STATE="$DATA_DIR/state.tsv"
 LOG="$DATA_DIR/changes.log"
@@ -57,7 +58,7 @@ if command -v flock >/dev/null; then
     flock -n 9 || { log "already running, giving up"; exit 0; }
 fi
 OWN_PROGRESS=1
-progress "🔄 Starting a run"
+progress "Starting a run"
 
 # ---------------------------------------------------------------- migration from the French version
 # Earlier versions used French file and folder names: rename them once.
@@ -197,7 +198,7 @@ nc_flush() {  # processes the upload queue
     : > "$TMP/queue.fail"
     while IFS=$'\t' read -r op rel dst; do
         cnt=$((cnt + 1)); [ $((cnt % 50)) -eq 0 ] && log "  $cnt / $total"
-        [ $((cnt % 10)) -eq 0 ] && progress "⬆️ Uploading to Nextcloud $cnt/$total"
+        [ $((cnt % 10)) -eq 0 ] && progress "Uploading to Nextcloud $cnt/$total"
         if [ "$op" = CPY ]; then nc_copy_now "$rel" "$dst" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\t%s\n' "$op" "$rel" "$dst" >> "$TMP/queue.fail"; }
         elif [ "$op" = DEL ]; then nc_delete_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
         elif [ -f "$FILES/$rel" ]; then nc_put_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
@@ -260,7 +261,7 @@ bot_queue() {  # leaves the announcements for the Discord bot
     [ -s "$TMP/discord.txt" ] || [ "$DISCORD_ALWAYS" = 1 ] || return 0
     mkdir -p "$DATA_DIR/notifications"
     local f="$DATA_DIR/notifications/$(date +%Y%m%d-%H%M%S)-$$"
-    { printf '📋 **TSL** — run of %s\n' "$(date '+%Y-%m-%d %H:%M')"
+    { printf '**TSL** — run of %s\n' "$(date '+%Y-%m-%d %H:%M')"
       if [ -s "$TMP/discord.txt" ]; then cat "$TMP/discord.txt"; else echo "✅ No changes."; fi
       printf '_%s_\n' "$1"; } > "$f.tmp" && mv "$f.tmp" "$f.txt"
 }
@@ -273,7 +274,7 @@ discord_send() {  # sends the collected announcements, in messages under 2000 ch
         [ "$DISCORD_ALWAYS" = 1 ] && discord_post "✅ **TSL** — run of $(date '+%Y-%m-%d %H:%M'): no changes (${summary})"
         return 0
     fi
-    msg="📋 **TSL** — run of $(date '+%Y-%m-%d %H:%M')"
+    msg="**TSL** — run of $(date '+%Y-%m-%d %H:%M')"
     while IFS= read -r line; do
         if [ $(( ${#msg} + ${#line} + 1 )) -gt 1900 ]; then discord_post "$msg"; msg=""; fi
         msg="${msg:+$msg$'\n'}$line"
@@ -321,7 +322,7 @@ declare -A WANT_LIST=() WANT_POS=() WANT_NAME=() WANT_AUTHOR=()
 ORDER=()
 for lst in $LISTS; do
     log "Reading list $lst"
-    progress "📜 Reading list $lst"
+    progress "Reading list $lst"
     if ! curl -sS -m 60 -f "$LIST_BASE_URL/$lst" -o "$TMP/$lst.html"; then
         die "cannot read $LIST_BASE_URL/$lst (nothing was changed)"
     fi
@@ -343,12 +344,12 @@ for lst in $LISTS; do
         while IFS= read -r line; do note "$line"; done < "$TMP/$lst.moves"
         while IFS= read -r line; do
             case "$line" in
-                *"ENTERED the list"*) notify "➕ ${line}" ;;
-                *"LEFT the list"*)    notify "➖ ${line}" ;;
+                *"ENTERED the list"*) notify "${line}" ;;
+                *"LEFT the list"*)    notify "${line}" ;;
             esac
         done < "$TMP/$lst.moves"
         moved="$(grep -c 'RANKING' "$TMP/$lst.moves" || true)"
-        [ "${moved:-0}" -gt 0 ] && notify "↕️ [$lst] $moved level(s) moved in the ranking"
+        [ "${moved:-0}" -gt 0 ] && notify "[$lst] $moved level(s) moved in the ranking"
     fi
 
     while IFS=$'\t' read -r pos id name author; do
@@ -405,7 +406,7 @@ for id in "${ORDER[@]}"; do
 
     n_done=$((n_done + 1))
     log "Downloading [$n_done/$total] $name ($id)"
-    progress "🔄 Checking levels $n_done/$total"
+    progress "Checking levels $n_done/$total"
     rc=0; gd_post downloadGJLevel22.php "levelID=$id" "$TMP/resp" || rc=$?
     [ "$rc" -eq 2 ] && { GD_BLOCKED=1; failed=$((failed + 1)); break; }
     [ "$rc" -eq 0 ] || { failed=$((failed + 1)); continue; }
@@ -414,7 +415,7 @@ for id in "${ORDER[@]}"; do
         # level missing from the GD servers: deleted or made private
         if [ "${ST_STATUS[$id]:-ok}" != deleted ]; then
             note "[$lst] DELETED from the GD servers (or made private): $name ($id) — the last copy is kept"
-            notify "🗑️ [$lst] **Deleted** from the GD servers (or made private): $(gdlink "$name" "$id") by $author"
+            notify "[$lst] **Deleted** from the GD servers (or made private): $(gdlink "$name" "$id") by $author"
             ST_STATUS[$id]=deleted; ST_LIST[$id]="$lst"; ST_VER[$id]="${ST_VER[$id]:-}"
             ST_SHA[$id]="${ST_SHA[$id]:-}"; ST_FILE[$id]="$old"; ST_INFO[$id]="${ST_INFO[$id]:-}"
             save_state
@@ -435,7 +436,7 @@ for id in "${ORDER[@]}"; do
 
     if [ "${ST_STATUS[$id]:-ok}" = deleted ]; then
         note "[$lst] REAPPEARED on the GD servers: $name ($id)"
-        notify "♻️ [$lst] **Reappeared** on the GD servers: $(gdlink "$name" "$id")"
+        notify "[$lst] **Reappeared** on the GD servers: $(gdlink "$name" "$id")"
         ST_STATUS[$id]=ok
     fi
 
@@ -448,13 +449,22 @@ for id in "${ORDER[@]}"; do
         mkdir -p "$FILES/$(dirname "$hist")" && cp "$FILES/$old" "$FILES/$hist" && nc_put "$hist"
         extra=""
         if [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then extra="$(info_diff "${ST_INFO[$id]}" "$info")"; fi
-        note "[$lst] MODIFIED: $name ($id) v${ST_VER[$id]} -> v$ver${extra:+ (info: $extra)} (previous version in $hist)"
-        notify "✏️ [$lst] **Level modified**: $(gdlink "$name" "$id") by $author (v${ST_VER[$id]} → v$ver)${extra:+ — info also changed: $extra}"
+        # object-level comparison of the two versions (level_diff.sh)
+        diff_log=""; : > "$TMP/diff.msg"
+        diffrel="history/$(safe_name "$name") ($id)/${DAY}_v${ST_VER[$id]}_to_v${ver}_diff.txt"
+        if [ -x "$DIFF_TOOL" ] && "$DIFF_TOOL" "$FILES/$old" "$TMP/level.gmd" "$FILES/$diffrel" > "$TMP/diff.out" 2>/dev/null; then
+            diff_log="$(awk -F'\t' '$1 == "LOG" { print $2; exit }' "$TMP/diff.out")"
+            awk -F'\t' '$1 == "MSG" { print "- " $2 }' "$TMP/diff.out" > "$TMP/diff.msg"
+            nc_put "$diffrel"
+        fi
+        note "[$lst] MODIFIED: $name ($id) v${ST_VER[$id]} -> v$ver${diff_log:+ — $diff_log}${extra:+ (info: $extra)} (previous version in $hist)"
+        notify "[$lst] **Level modified**: $(gdlink "$name" "$id") by $author (v${ST_VER[$id]} → v$ver)${extra:+ — info also changed: $extra}"
+        while IFS= read -r line; do notify "$line"; done < "$TMP/diff.msg"
         updated=$((updated + 1)); changed=1
     elif [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then
         what="$(info_diff "${ST_INFO[$id]}" "$info")"
         note "[$lst] INFO CHANGED: $name ($id): $what"
-        notify "📝 [$lst] Info changed for $(gdlink "$name" "$id"): $what"
+        notify "[$lst] Info changed for $(gdlink "$name" "$id"): $what"
         infos=$((infos + 1)); changed=1
     else
         same=$((same + 1))
@@ -497,8 +507,8 @@ fi
 nc_flush || failed=$((failed + 1))
 
 summary="$new new, $updated modified, $infos info changed, $deleted deleted, $same unchanged, $failed failed"
-[ "$FIRST_RUN" = 1 ] && [ "$new" -gt 0 ] && notify "📦 First run: $new levels archived to Nextcloud."
-[ "${GD_BLOCKED:-0}" = 1 ] && notify "⚠️ The GD servers rate-limited the requests: run interrupted, the rest will be done on the next run."
+[ "$FIRST_RUN" = 1 ] && [ "$new" -gt 0 ] && notify "First run: $new levels archived to Nextcloud."
+[ "${GD_BLOCKED:-0}" = 1 ] && notify "The GD servers rate-limited the requests: run interrupted, the rest will be done on the next run."
 discord_send "$summary"
 printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
 log "Done: $summary"

@@ -8,6 +8,7 @@ HOUR="${1:-4}"   # hour of the daily run (default: 4 am)
 install -d /opt/tsl-sync /var/lib/tsl-sync
 install -m 755 "$SRC/tsl-sync.sh" /opt/tsl-sync/tsl-sync.sh
 install -m 644 "$SRC/nuxt_levels.awk" /opt/tsl-sync/nuxt_levels.awk
+install -m 755 "$SRC/level_diff.sh" /opt/tsl-sync/level_diff.sh
 if [ ! -f /etc/tsl-sync.conf ]; then
     install -m 600 "$SRC/tsl-sync.conf.example" /etc/tsl-sync.conf
     echo ">> Config created: /etc/tsl-sync.conf — fill in NC_URL, NC_USER and NC_PASS."

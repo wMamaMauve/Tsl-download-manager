@@ -70,7 +70,20 @@ On every run, the script:
 3. downloads **every** level again and compares all its data (SHA-256 of the level data) — the version number is not reliable;
 4. also compares the info (name, description, song, stars, difficulty, featured/epic…) and reports which ones changed;
    a level that disappears from the GD servers is reported **DELETED** (its last copy is kept), then **REAPPEARED** if it comes back;
-5. if the level data really changed, the previous version goes to `history/` and the new one replaces the file (**MODIFIED** in the log).
+5. if the level data really changed, the previous version goes to `history/` and the new one replaces the file (**MODIFIED** in the log);
+6. the two versions are compared **object by object** (`level_diff.sh`): objects added, removed and moved, where in the level (in %), which kinds of objects (blocks, spikes, triggers, portals, orbs…) and which level settings changed (start speed, colors, song offset…). The summary goes to the log and to Discord, and the full list is saved next to the previous version in `history/…/<date>_vX_to_vY_diff.txt`.
+
+Example of a Discord announcement:
+
+```
+[tsl] Level modified: Shitty NETWORK by Whitar (v9 → v10)
+- +124 / -38 objects, 5 moved (34,931 -> 35,017) — mostly between 62% and 71% of the level
+- Added: 80 blocks, 30 spike/hazards, 14 move triggers
+- Removed: 38 blocks
+- Settings changed: start speed
+```
+
+An object is counted as *moved* when an identical object (same properties except its position) was removed close by (less than 20 blocks away); otherwise it counts as one removal and one addition. You can also compare two files by hand: `/opt/tsl-sync/level_diff.sh old.gmd new.gmd details.txt`.
 
 Log example:
 
