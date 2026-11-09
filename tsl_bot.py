@@ -149,6 +149,7 @@ def find_levels(query):
 
 # log keywords (English, plus the French ones written by older versions)
 IMPORTANT = ("MODIFIED", "INFO CHANGED", "DELETED", "REAPPEARED", "ENTERED", "LEFT",
+             "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN",
              "MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE")
 
 
@@ -201,6 +202,27 @@ def last_run_counts():
     if not m:
         return None, {}
     return m.group(1), {k.strip(): int(v) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(2))}
+
+
+STATUS_LABELS = {"private": "private", "deleted": "deleted / unavailable", "noaccess": "no access",
+                 "invalid": "invalid link"}
+
+
+def load_unavailable_videos():
+    """Videos of the levels that cannot be watched (from the last check), as dicts; None if never checked."""
+    path = DATA_DIR / "records_unavailable.tsv"
+    if not path.exists():
+        return None
+    keys = ("list", "id", "name", "kind", "player", "link", "status", "since")
+    return [dict(zip(keys, row)) for row in read_tsv(path) if len(row) >= 8]
+
+
+def video_label(kind, player):
+    if kind == "verification":
+        return f"Verification by {player}" if player else "Verification"
+    if kind == "showcase":
+        return "Showcase"
+    return f"Record of {player}" if player else "Record"
 
 
 def last_run_modified():
@@ -987,9 +1009,57 @@ async def cmd_status(interaction: discord.Interaction):
             value = "None"
         embed.add_field(name="Modified levels (last run)", value=value, inline=False)
 
+    videos = load_unavailable_videos()
+    if videos is not None:
+        embed.add_field(name="Unavailable videos", inline=False,
+                        value=(f"{len(videos)} verification / showcase / record videos — see `/records`"
+                               if videos else "None: every video can be watched"))
     embed.add_field(name="Tracked levels", inline=False, value="\n".join(
         f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS))
     await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="records", description="Verification, showcase and record videos that can no longer be watched")
+@app_commands.describe(query="Only this level (name, creator or ID)")
+@app_commands.autocomplete(query=level_autocomplete)
+async def cmd_records(interaction: discord.Interaction, query: str = ""):
+    videos = load_unavailable_videos()
+    if videos is None:
+        await interaction.response.send_message("The videos have not been checked yet: they are checked "
+                                                "during the next run.", ephemeral=True)
+        return
+    title = "Unavailable videos"
+    colour = EMBED_COLOUR
+    if query:
+        matches = find_levels(query)
+        if not matches:
+            await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+            return
+        lv = next((x for x in matches if x["id"] == query), matches[0])
+        videos = [v for v in videos if v["id"] == lv["id"]]
+        title, colour = f"Unavailable videos — {lv['name']}", list_colour(lv["list"])
+        if not videos:
+            await interaction.response.send_message(f"✅ Every video of **{lv['name']}** can be watched.")
+            return
+    elif not videos:
+        await interaction.response.send_message("✅ Every verification, showcase and record video can be watched.")
+        return
+    order = {lv["id"]: (LISTS.index(lv["list"]) if lv["list"] in LISTS else 9, lv["position"])
+             for lv in load_index()}
+    videos.sort(key=lambda v: (order.get(v["id"], (9, 0)), v["kind"] != "verification", v["player"].lower()))
+    lines, current = [], None
+    for v in videos:
+        if v["id"] != current:
+            current = v["id"]
+            lines.append(f"**[{v['name']}](<{LIST_BASE_URL}/{v['list']}?level={v['id']}>)**")
+        since = discord_time(v["since"], "D") if v["since"] not in ("", "-") else "?"
+        link = f"[video](<{v['link']}>)" if v["link"].startswith("http") else f"`{v['link'][:60]}`"
+        lines.append(f"• {video_label(v['kind'], v['player'])} — {STATUS_LABELS.get(v['status'], v['status'])}"
+                     f" · {link} · since {since}")
+    noun = "video" if len(videos) == 1 else "videos"
+    view = PagedView(title, paginate(lines, 20), interaction.user.id, "/records",
+                     footer=f"{len(videos)} unavailable {noun}", colour=colour)
+    await view.send(interaction)
 
 
 @bot.tree.command(name="run", description="Start a tracking run now: re-download every level and look for changes (~35 min)")

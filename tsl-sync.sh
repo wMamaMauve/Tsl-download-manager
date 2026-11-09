@@ -29,6 +29,9 @@ RESYNC="${RESYNC:-0}"            # 1 = re-upload every local file to Nextcloud
 GMD_BINARY_VERSION="${GMD_BINARY_VERSION:-47}"  # game save format version (key k50, 47 = GD 2.2)
 AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
 DIFF_TOOL="${DIFF_TOOL:-$SCRIPT_DIR/level_diff.sh}"   # object-level comparison of two versions
+RECORD_CHECK="${RECORD_CHECK:-1}"   # 1 = check that the verification / showcase / record videos still work
+RECORD_TOOL="${RECORD_TOOL:-$SCRIPT_DIR/record_check.sh}"
+RECORD_ANNOUNCE_MAX="${RECORD_ANNOUNCE_MAX:-10}"   # videos listed one by one on Discord (then a count)
 
 STATE="$DATA_DIR/state.tsv"
 LOG="$DATA_DIR/changes.log"
@@ -327,7 +330,7 @@ for lst in $LISTS; do
         die "cannot read $LIST_BASE_URL/$lst (nothing was changed)"
     fi
     sed -n 's/.*id="__NUXT_DATA__"[^>]*>\(.*\)/\1/p' "$TMP/$lst.html" | sed 's#</script>.*##' \
-        | awk -f "$AWK_PARSER" > "$TMP/$lst.tsv"
+        | awk -v RECORDS="$TMP/$lst.rec" -f "$AWK_PARSER" > "$TMP/$lst.tsv"
     nb="$(wc -l < "$TMP/$lst.tsv")"
     [ "$nb" -gt 0 ] || die "no level found in list $lst (the site may have changed)"
     log "  $nb levels"
@@ -488,6 +491,60 @@ for id in "${ORDER[@]}"; do
     save_state   # saved as we go: an interruption loses nothing
 done
 save_state
+
+# ---------------------------------------------------------------- 2b. videos of the levels
+video_label() {  # video_label <kind> <player>
+    case "$1" in
+        verification) printf 'verification%s' "${2:+ by $2}" ;;
+        showcase)     printf 'showcase' ;;
+        *)            printf 'record%s' "${2:+ of $2}" ;;
+    esac
+}
+status_label() {
+    case "$1" in
+        private) echo "private" ;; deleted) echo "deleted / unavailable" ;;
+        noaccess) echo "no access" ;; invalid) echo "invalid link" ;; *) echo "$1" ;;
+    esac
+}
+if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
+    log "Checking the videos of the levels"
+    progress "Checking the record videos"
+    # list <TAB> id <TAB> name <TAB> kind <TAB> player <TAB> link   (a level in two lists: first list only)
+    for lst in $LISTS; do
+        [ -f "$TMP/$lst.rec" ] && awk -F'\t' -v OFS='\t' -v L="$lst" '{ print L, $0 }' "$TMP/$lst.rec"
+    done | awk -F'\t' '!($2 in owner) { owner[$2] = $1 } owner[$2] == $1' > "$TMP/videos.tsv"
+    RECORDS_UNAV="$DATA_DIR/records_unavailable.tsv"
+    if bash "$RECORD_TOOL" "$TMP/videos.tsv" "$DATA_DIR/records_state.tsv" "$RECORDS_UNAV" > "$TMP/videos.changes"; then
+        total=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
+        log "  $total videos, $unav unavailable"
+        if grep -qx FIRST "$TMP/videos.changes"; then
+            note "VIDEOS: first check, $unav of $total level videos are unavailable"
+            [ "$unav" -gt 0 ] && notify "First check of the level videos: **$unav** verification / showcase / record videos are unavailable. Use \`/records\` to see them."
+        fi
+        for kind in DOWN UP; do
+            n=0
+            while IFS=$'\t' read -r what status vlst vid vname vkind vuser vlink; do
+                [ "$what" = "$kind" ] || continue
+                n=$((n + 1))
+                if [ "$kind" = DOWN ]; then
+                    note "[$vlst] VIDEO UNAVAILABLE ($(status_label "$status")): $vname ($vid) — $(video_label "$vkind" "$vuser") $vlink"
+                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify "[$vlst] **Video unavailable** ($(status_label "$status")): [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
+                else
+                    note "[$vlst] VIDEO AVAILABLE AGAIN: $vname ($vid) — $(video_label "$vkind" "$vuser") $vlink"
+                    [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify "[$vlst] **Video available again**: [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>) — $(video_label "$vkind" "$vuser") · [link](<$vlink>)"
+                fi
+            done < "$TMP/videos.changes"
+            if [ "$n" -gt "$RECORD_ANNOUNCE_MAX" ]; then
+                if [ "$kind" = DOWN ]; then notify "…and $((n - RECORD_ANNOUNCE_MAX)) more unavailable videos (\`/records\` lists them all)."
+                else notify "…and $((n - RECORD_ANNOUNCE_MAX)) more videos available again."; fi
+            fi
+        done
+        { printf 'list\tid\tlevel\tkind\tplayer\tlink\tstatus\tsince\n'; cat "$RECORDS_UNAV"; } > "$FILES/unavailable_videos.tsv"
+        nc_put "unavailable_videos.tsv"
+    else
+        log "  video check failed (will be retried on the next run)"
+    fi
+fi
 
 # ---------------------------------------------------------------- 3. index + log
 for lst in $LISTS; do

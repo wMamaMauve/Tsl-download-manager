@@ -3,6 +3,8 @@
 # their values by index).
 # TSV output: position <TAB> id <TAB> name <TAB> author <TAB> verification video <TAB> showcase video
 # (a missing video is written "-")
+# With -v RECORDS=<file>, also writes every video of each level to that file:
+#   id <TAB> level name <TAB> kind (verification|showcase|record) <TAB> player <TAB> link
 # Works with mawk / gawk / busybox awk.
 
 function hexval(h,   i, c, v) {
@@ -37,6 +39,25 @@ function jstr(s,   out, i, c, n, cp, lo) {
     }
     gsub(/\t/, " ", out)
     return out
+}
+# Fields of a flat JSON object '{"a":1,"b":2}' -> obj["a"] = 1 ...  (returns the number of fields)
+function fields(e, obj,   inner, m, kv, x, p) {
+    delete obj
+    if (substr(e, 1, 1) != "{") return 0
+    inner = substr(e, 2, length(e) - 2)
+    m = split(inner, kv, ",")
+    for (x = 1; x <= m; x++) {
+        p = index(kv[x], ":"); if (p == 0) continue
+        obj[substr(kv[x], 2, p - 3)] = substr(kv[x], p + 1)
+    }
+    return m
+}
+# One video line for the RECORDS file (a link that cannot be cleaned up is written as typed).
+function video_line(id, name, kind, user, raw,   u) {
+    raw = jstr(raw); u = fixurl(raw); if (u == "") u = raw
+    gsub(/[\t\r\n]/, " ", u)
+    if (u == "" || u == "null") return
+    printf "%s\t%s\t%s\t%s\t%s\n", id, name, kind, user, u > RECORDS
 }
 # Cleans up a video URL typed by hand on the site (spaces, "ttps://", missing scheme).
 function fixurl(u) {
@@ -92,5 +113,18 @@ END {
         # "-" for a missing video: read with IFS=tab would merge consecutive tabs
         printf "%s\t%s\t%s\t%s\t%s\t%s\n", pos, id, jstr(el[f["name"]]), jstr(el[f["author"]]), \
             (video == "" ? "-" : video), (showcase == "" ? "-" : showcase)
+        if (RECORDS == "") continue
+        lname = jstr(el[f["name"]])
+        verifier = ("verifier" in f) ? jstr(el[f["verifier"]]) : ""
+        if ("verification" in f) video_line(id, lname, "verification", verifier, el[f["verification"]])
+        if ("showcase" in f) video_line(id, lname, "showcase", "", el[f["showcase"]])
+        if (!("records" in f)) continue
+        list = el[f["records"]]
+        gsub(/[\[\] ]/, "", list)
+        nr = split(list, recs, ",")
+        for (r = 1; r <= nr; r++) {
+            if (recs[r] !~ /^[0-9]+$/ || !fields(el[recs[r]], rec) || !("link" in rec)) continue
+            video_line(id, lname, "record", ("user" in rec) ? jstr(el[rec["user"]]) : "", el[rec["link"]])
+        }
     }
 }

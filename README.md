@@ -58,6 +58,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 | `/changes [days]` | what changed in the last days |
 | `/list <tsl\|tslplus> [page]` | the ranking, 25 levels per page, with First / Previous / Next / Last buttons |
 | `/status` | result of the last run |
+| `/records [level]` | verification, showcase and record videos that can no longer be watched (private, deleted…), with a link and since when |
 | `/run` | (admins) start a tracking run now: re-downloads every level and looks for changes (~35 min) |
 
 ### Pictures of the changed objects in `/diff`
@@ -104,6 +105,16 @@ Log example:
 2026-11-10 04:21:07 [tsl] RANKING: Shitty Nhelv (106481744) #3 -> #4
 2026-11-10 04:23:40 [tsl] MODIFIED: Shitty NETWORK (132801785) v1 -> v2 (previous version in history/...)
 ```
+
+## Record videos
+
+Every night, the script also checks that the videos of each level can still be watched: the verification, the showcase and **every record** listed on the site (about 15,000 videos).
+
+- YouTube: a video is **private** or **deleted / unavailable**; a video whose embedding is disabled still counts as watchable;
+- other sites (Medal, Google Drive, …): **deleted** when the page is gone (404), **no access** when it asks to sign in;
+- a link that is not a link at all is reported as **invalid link**.
+
+When a video becomes unavailable (or available again), it is written to `changes.log` and announced on Discord (the first 10, then a count). `/records` lists every unavailable video, and `unavailable_videos.tsv` in Nextcloud holds the same list. The first check takes about 20 minutes and only posts a count; after that, a working video is checked again every 3 days (`RECORD_CHECK_DAYS`) and unavailable ones every night. A video that could not be checked (timeout, YouTube rate limit) keeps its previous status. To disable the check: `RECORD_CHECK=0`.
 
 ## Useful commands
 

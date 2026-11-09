@@ -21,6 +21,11 @@ DELAY=3
 UPLOAD_AT_END=1
 # 1 = create a YYYY-MM-DD folder in Nextcloud every day with the levels new/changed that day
 DAILY=1
+# 1 = check every night that the verification / showcase / record videos can still be watched
+#     (private or deleted videos are announced on Discord; /records lists them)
+RECORD_CHECK=1
+# a working video is checked again after this many days (unavailable ones every night)
+RECORD_CHECK_DAYS=3
 
 # --- Discord ------------------------------------------------------------------
 # Bot (recommended): announcements + /level /diff /changes /list /status /run commands
