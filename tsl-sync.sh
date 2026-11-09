@@ -61,7 +61,26 @@ if command -v flock >/dev/null; then
     flock -n 9 || { log "already running, giving up"; exit 0; }
 fi
 OWN_PROGRESS=1
-progress "Starting a run"
+
+# What to do: all (default), levels (levels only), records (videos only).
+# Given as first argument, as RUN_MODE, or left by the Discord bot's /run in next_run_mode.
+RUN_MODE="${1:-${RUN_MODE:-}}"
+if [ -z "$RUN_MODE" ] && [ -f "$DATA_DIR/next_run_mode" ]; then
+    RUN_MODE="$(head -c 20 "$DATA_DIR/next_run_mode" | tr -dc 'a-z')"
+fi
+rm -f "$DATA_DIR/next_run_mode"
+case "${RUN_MODE:-all}" in
+    all|levels|records) RUN_MODE="${RUN_MODE:-all}" ;;
+    *) die "unknown run mode '$RUN_MODE' (all, levels or records)" ;;
+esac
+[ "$RUN_MODE" = levels ] && RECORD_CHECK=0
+[ "$RUN_MODE" = records ] && export RECORD_CHECK_DAYS=0   # asked on purpose: check every video again
+case "$RUN_MODE" in
+    levels)  progress "Starting a run (levels only)" ;;
+    records) progress "Starting a run (record videos only)" ;;
+    *)       progress "Starting a run" ;;
+esac
+log "Run mode: $RUN_MODE"
 
 # ---------------------------------------------------------------- migration from the French version
 # Earlier versions used French file and folder names: rename them once.
@@ -312,7 +331,7 @@ save_state() {
 # The first versions of the script did not write the k50 key (format version):
 # without it, the game imports an empty level. Add it without re-downloading.
 fixed=0
-while IFS= read -r -d '' f; do
+[ "$RUN_MODE" = records ] || while IFS= read -r -d '' f; do
     if ! grep -q '<k>k50</k>' "$f"; then
         sed -i "s#<k>k21</k><i>2</i>#<k>k21</k><i>2</i><k>k50</k><i>$GMD_BINARY_VERSION</i>#" "$f"
         nc_put "${f#"$FILES/"}"; fixed=$((fixed + 1))
@@ -401,6 +420,7 @@ info_diff() {  # info_diff <old> <new> -> labels of the changed fields, separate
 # link to the level's page on the list site: <LIST_BASE_URL>/<list>?level=<id>
 gdlink() { printf '[%s](<%s/%s?level=%s>)' "$1" "${LIST_BASE_URL%/}" "$lst" "$2"; }
 
+[ "$RUN_MODE" = records ] && ORDER=()   # videos only: nothing to download
 new=0; updated=0; infos=0; same=0; failed=0; deleted=0; n_done=0; total=${#ORDER[@]}
 log "Full check of $total levels (data downloaded and compared)"
 for id in "${ORDER[@]}"; do
@@ -515,10 +535,10 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
     done | awk -F'\t' '!($2 in owner) { owner[$2] = $1 } owner[$2] == $1' > "$TMP/videos.tsv"
     RECORDS_UNAV="$DATA_DIR/records_unavailable.tsv"
     if bash "$RECORD_TOOL" "$TMP/videos.tsv" "$DATA_DIR/records_state.tsv" "$RECORDS_UNAV" > "$TMP/videos.changes"; then
-        total=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
-        log "  $total videos, $unav unavailable"
+        total_videos=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
+        log "  $total_videos videos, $unav unavailable"
         if grep -qx FIRST "$TMP/videos.changes"; then
-            note "VIDEOS: first check, $unav of $total level videos are unavailable"
+            note "VIDEOS: first check, $unav of $total_videos level videos are unavailable"
             [ "$unav" -gt 0 ] && notify "First check of the level videos: **$unav** verification / showcase / record videos are unavailable. Use \`/records\` to see them."
         fi
         for kind in DOWN UP; do
@@ -575,9 +595,15 @@ if [ -n "$DISCORD_BOT_TOKEN" ] && [ -s "$TMP/modified.tsv" ]; then
     notify ""
     notify "Use \`/diff $(head -1 "$TMP/modified.tsv" | cut -f3)\` to see what changed in a level."
 fi
-discord_send "$summary"
-printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
-# levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)
-if [ -s "$TMP/modified.tsv" ]; then cp "$TMP/modified.tsv" "$DATA_DIR/last_run_modified.tsv"; else : > "$DATA_DIR/last_run_modified.tsv"; fi
+if [ "$RUN_MODE" = records ]; then
+    # videos only: /status keeps showing the numbers of the last level run
+    summary="record videos only: ${total_videos:-0} videos checked, ${unav:-0} unavailable"
+    discord_send "$summary"
+else
+    discord_send "$summary"
+    printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
+    # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)
+    if [ -s "$TMP/modified.tsv" ]; then cp "$TMP/modified.tsv" "$DATA_DIR/last_run_modified.tsv"; else : > "$DATA_DIR/last_run_modified.tsv"; fi
+fi
 log "Done: $summary"
 [ "$failed" -eq 0 ]

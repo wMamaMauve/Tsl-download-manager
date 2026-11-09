@@ -1062,15 +1062,40 @@ async def cmd_records(interaction: discord.Interaction, query: str = ""):
     await view.send(interaction)
 
 
-@bot.tree.command(name="run", description="Start a tracking run now: re-download every level and look for changes (~35 min)")
+RUN_MODES = {
+    "all": ("levels and record videos", "35 to 55 min"),
+    "levels": ("levels only", "about 35 min"),
+    "records": ("record videos only, every video checked again", "about 20 min"),
+}
+
+
+@bot.tree.command(name="run", description="Start a tracking run now: levels, record videos, or both")
+@app_commands.describe(what="What to check (default: both)")
+@app_commands.choices(what=[
+    app_commands.Choice(name="Levels and record videos", value="all"),
+    app_commands.Choice(name="Levels only (re-download every level and look for changes)", value="levels"),
+    app_commands.Choice(name="Record videos only (verification, showcase and records)", value="records"),
+])
 @app_commands.default_permissions(manage_guild=True)
-async def cmd_run(interaction: discord.Interaction):
+async def cmd_run(interaction: discord.Interaction, what: app_commands.Choice[str] = None):
+    mode = what.value if what else "all"
+    step = current_progress()
+    if step:
+        await interaction.response.send_message(f"A run is already in progress ({step}).", ephemeral=True)
+        return
+    try:
+        (DATA_DIR / "next_run_mode").write_text(mode + "\n", encoding="utf-8")
+    except OSError as exc:
+        await interaction.response.send_message(f"Could not start the run: {exc}", ephemeral=True)
+        return
     res = subprocess.run(["systemctl", "start", "--no-block", "tsl-sync"], capture_output=True, text=True,
                          check=False)
+    label, duration = RUN_MODES[mode]
     if res.returncode == 0:
         await interaction.response.send_message(
-            "Run started (about 35 min). Changes will be announced here when it is done.")
+            f"Run started: {label} ({duration}). Changes will be announced here when it is done.")
     else:
+        (DATA_DIR / "next_run_mode").unlink(missing_ok=True)
         await interaction.response.send_message(f"Could not start the run: {res.stderr.strip()[:500]}",
                                                 ephemeral=True)
 

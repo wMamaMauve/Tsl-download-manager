@@ -59,7 +59,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 | `/list <tsl\|tslplus> [page]` | the ranking, 25 levels per page, with First / Previous / Next / Last buttons |
 | `/status` | result of the last run |
 | `/records [level]` | verification, showcase and record videos that can no longer be watched (private, deleted…), with a link and since when |
-| `/run` | (admins) start a tracking run now: re-downloads every level and looks for changes (~35 min) |
+| `/run [what]` | (admins) start a run now: **levels and record videos** (default), **levels only** (re-downloads every level, ~35 min) or **record videos only** (checks every video again, ~20 min) |
 
 ### Pictures of the changed objects in `/diff`
 
@@ -121,6 +121,7 @@ When a video becomes unavailable (or available again), it is written to `changes
 | Action | Command |
 |---|---|
 | Run now | `systemctl start --no-block tsl-sync` |
+| Levels only / record videos only | `/opt/tsl-sync/tsl-sync.sh levels` / `/opt/tsl-sync/tsl-sync.sh records` |
 | Re-upload **all** local files to Nextcloud | `RESYNC=1 /opt/tsl-sync/tsl-sync.sh` |
 | Show the sync log | `journalctl -u tsl-sync` |
 | Next scheduled run | `systemctl list-timers tsl-sync.timer` |
