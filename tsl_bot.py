@@ -15,6 +15,7 @@ import asyncio
 import datetime as dt
 import logging
 import os
+import random
 import re
 import shlex
 import json
@@ -181,12 +182,23 @@ def current_progress():
         return None
 
 
+IDLE_ROTATE = 60   # seconds before the idle activity shows another random level
+_IDLE = {"text": "", "until": 0.0}
+
+
 def idle_activity_text():
-    """'Shitty NETWORK on TSL': the #1 level of the first list (followed if the ranking changes)."""
-    first = LISTS[0] if LISTS else "tsl"
-    top = [lv for lv in load_index() if lv["list"] == first and lv["position"] == 1]
-    label = "TSL" if first == "tsl" else ("TSL+" if first == "tslplus" else first)
-    return (f"{top[0]['name']} on {label}" if top else "The Shitty List")[:128]
+    """'Shitty NETWORK on TSL': a random level of any list, changed every IDLE_ROTATE seconds."""
+    if _IDLE["text"] and time.time() < _IDLE["until"]:
+        return _IDLE["text"]
+    levels = load_index()
+    if levels:
+        lv = random.choice(levels)
+        label = {"tsl": "TSL", "tslplus": "TSL+"}.get(lv["list"], lv["list"])
+        _IDLE["text"] = f"{lv['name']} on {label}"[:128]
+    else:
+        _IDLE["text"] = "The Shitty List"
+    _IDLE["until"] = time.time() + IDLE_ROTATE
+    return _IDLE["text"]
 
 
 def discord_time(text, style="f"):
