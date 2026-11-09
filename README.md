@@ -32,6 +32,9 @@ Geometry Dash/TSL/
 │   └── index.tsv            ← classement actuel (position, id, nom, auteur, fichier)
 ├── tslplus/
 │   └── ...
+├── 2026-11-10/               ← un dossier par jour de passage :
+│   ├── tsl/...gmd           ←   niveaux nouveaux ou modifiés ce jour-là
+│   └── changements.log      ←   journal du jour ("Aucun changement." sinon)
 ├── historique/
 │   └── Shitty NETWORK (132801785)/
 │       └── 2026-11-09_v1.gmd   ← anciennes versions des niveaux modifiés
@@ -39,6 +42,8 @@ Geometry Dash/TSL/
 ```
 
 Les `.gmd` s'importent dans le jeu avec **GDShare** (via Geode) : ils arrivent dans tes niveaux de l'éditeur.
+
+Les dossiers du jour sont des copies faites directement dans Nextcloud (rien n'est renvoyé depuis le serveur). Pour les désactiver : `DAILY=0` dans la config.
 
 ## Détection des changements
 

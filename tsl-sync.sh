@@ -25,6 +25,7 @@ NC_USER="${NC_USER:-}"
 NC_PASS="${NC_PASS:-}"           # mot de passe d'application Nextcloud
 NC_DIR="${NC_DIR:-TSL}"          # dossier de destination dans Nextcloud
 UPLOAD_AT_END="${UPLOAD_AT_END:-1}"  # 1 = tout envoyer à Nextcloud à la fin ; 0 = au fur et à mesure
+DAILY="${DAILY:-1}"              # 1 = un dossier par jour (AAAA-MM-JJ) avec les niveaux nouveaux/modifiés ce jour-là
 RESYNC="${RESYNC:-0}"            # 1 = renvoyer tous les fichiers locaux vers Nextcloud
 AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
 
@@ -32,12 +33,13 @@ STATE="$DATA_DIR/state.tsv"      # id  version  sha256  liste  chemin_relatif
 LOG="$DATA_DIR/changements.log"
 FILES="$DATA_DIR/fichiers"
 TMP="$(mktemp -d)"
+DAY="${TSL_DAY:-$(date +%F)}"
 trap 'rm -rf "$TMP"' EXIT
 trap 'log "Interrompu (l'"'"'état est sauvegardé, le prochain passage reprendra ici)"; exit 130' INT TERM
 
 # Tous les messages vont sur la sortie d'erreur, pour ne jamais se mélanger aux données.
 log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >&2; }
-note() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+note() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" "$TMP/run.notes" >&2; }
 die()  { log "ERREUR: $*"; exit 1; }
 
 for cmd in curl awk sed sha256sum od; do command -v "$cmd" >/dev/null || die "commande manquante : $cmd"; done
@@ -129,6 +131,15 @@ nc_delete_now() {
     case "$code" in 200|204|404) return 0 ;; *) log "  Nextcloud : échec de la suppression de $1 (HTTP $code)"; return 1 ;; esac
 }
 
+nc_copy_now() {  # copie côté serveur Nextcloud <source> -> <destination>, sans renvoyer le fichier
+    local src="$1" dst="$2" dir code
+    dir="$(dirname "$dst")"; [ "$dir" = "." ] && dir=""
+    nc_mkdirs "$dir" || return 1
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X COPY \
+        -H "Destination: $(nc_dav "$dst")" -H "Overwrite: T" "$(nc_dav "$src")")" || code=000
+    case "$code" in 201|204) return 0 ;; *) log "  Nextcloud : échec de la copie de $src vers $dst (HTTP $code)"; return 1 ;; esac
+}
+
 # Les envois sont mis en file d'attente ($QUEUE) et faits en une fois à la fin
 # (UPLOAD_AT_END=1, par défaut). Ce qui échoue reste dans la file pour le passage suivant.
 QUEUE="$DATA_DIR/a_envoyer.tsv"
@@ -141,19 +152,26 @@ nc_delete() {
     if [ "$UPLOAD_AT_END" = 1 ]; then printf 'DEL\t%s\n' "$1" >> "$QUEUE"; else nc_delete_now "$1" || true; fi
 }
 
+nc_copy() {
+    nc_enabled || return 0
+    if [ "$UPLOAD_AT_END" = 1 ]; then printf 'CPY\t%s\t%s\n' "$1" "$2" >> "$QUEUE"; else nc_copy_now "$1" "$2"; fi
+}
+
 nc_flush() {  # traite la file d'attente
     nc_enabled || return 0
     [ -s "$QUEUE" ] || return 0
-    local op rel total cnt=0 ok=0 ko=0
+    local op rel dst total cnt=0 ok=0 ko=0
     # garde seulement la dernière opération par fichier, dans l'ordre
-    awk -F'\t' '{ last[$2] = NR; line[NR] = $0 } END { for (i = 1; i <= NR; i++) { split(line[i], a, "\t"); if (last[a[2]] == i) print line[i] } }' \
+    awk -F'\t' '{ k = ($1 == "CPY") ? $3 : $2; key[NR] = k; last[k] = NR; line[NR] = $0 }
+        END { for (i = 1; i <= NR; i++) if (last[key[i]] == i) print line[i] }' \
         "$QUEUE" > "$TMP/queue"
     total="$(wc -l < "$TMP/queue")"
     log "Envoi vers Nextcloud ($total fichiers)"
     : > "$TMP/queue.fail"
-    while IFS=$'\t' read -r op rel; do
+    while IFS=$'\t' read -r op rel dst; do
         cnt=$((cnt + 1)); [ $((cnt % 50)) -eq 0 ] && log "  $cnt / $total"
-        if [ "$op" = DEL ]; then nc_delete_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
+        if [ "$op" = CPY ]; then nc_copy_now "$rel" "$dst" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\t%s\n' "$op" "$rel" "$dst" >> "$TMP/queue.fail"; }
+        elif [ "$op" = DEL ]; then nc_delete_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
         elif [ -f "$FILES/$rel" ]; then nc_put_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
         fi
     done < "$TMP/queue"
@@ -286,14 +304,15 @@ for id in "${ORDER[@]}"; do
     sha="$(awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "4") printf "%s", $(j + 1) }' "$TMP/raw" \
         | sha256sum | cut -d' ' -f1)"
 
+    changed=0
     if [ -z "${ST_SHA[$id]:-}" ] || [ ! -f "$FILES/${ST_FILE[$id]:-/nonexistent}" ]; then
-        [ -z "${ST_SHA[$id]:-}" ] && { note "[$lst] NOUVEAU : $name ($id) v$ver"; new=$((new + 1)); }
+        [ -z "${ST_SHA[$id]:-}" ] && { note "[$lst] NOUVEAU : $name ($id) v$ver"; new=$((new + 1)); changed=1; }
     elif [ "$sha" != "${ST_SHA[$id]}" ]; then
         # niveau modifié : on archive l'ancienne version
-        hist="historique/$(safe_name "$name") ($id)/$(date +%F)_v${ST_VER[$id]}.gmd"
+        hist="historique/$(safe_name "$name") ($id)/${DAY}_v${ST_VER[$id]}.gmd"
         mkdir -p "$FILES/$(dirname "$hist")" && cp "$FILES/${ST_FILE[$id]}" "$FILES/$hist" && nc_put "$hist"
         note "[$lst] MODIFIÉ : $name ($id) v${ST_VER[$id]} -> v$ver (ancienne version dans $hist)"
-        updated=$((updated + 1))
+        updated=$((updated + 1)); changed=1
     else
         same=$((same + 1))
         if [ "$ver" = "${ST_VER[$id]}" ] && [ "${ST_FILE[$id]}" = "$rel" ]; then continue; fi
@@ -305,6 +324,7 @@ for id in "${ORDER[@]}"; do
     fi
     mv "$TMP/level.gmd" "$FILES/$rel"
     nc_put "$rel"
+    [ "$DAILY" = 1 ] && [ "$changed" = 1 ] && nc_copy "$rel" "$DAY/$rel"   # copie dans le dossier du jour
     ST_VER[$id]="$ver"; ST_SHA[$id]="$sha"; ST_LIST[$id]="$lst"; ST_FILE[$id]="$rel"
     save_state   # sauvegarde au fil de l'eau : une interruption ne fait rien perdre
 done
@@ -320,6 +340,13 @@ for lst in $LISTS; do
     nc_put "$lst/index.tsv"
 done
 cp "$LOG" "$FILES/changements.log" && nc_put "changements.log"
+if [ "$DAILY" = 1 ]; then   # journal du jour (cumulé si plusieurs passages le même jour)
+    mkdir -p "$FILES/$DAY"
+    { printf '=== Passage du %s ===\n' "$(date '+%F %T')"
+      if [ -s "$TMP/run.notes" ]; then cat "$TMP/run.notes"; else echo "Aucun changement."; fi
+      echo; } >> "$FILES/$DAY/changements.log"
+    nc_put "$DAY/changements.log"
+fi
 [ "$RESYNC" = 1 ] && nc_resync
 nc_flush || failed=$((failed + 1))
 
