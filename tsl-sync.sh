@@ -35,13 +35,17 @@ FILES="$DATA_DIR/files"
 QUEUE="$DATA_DIR/upload_queue.tsv"
 TMP="$(mktemp -d)"
 DAY="${TSL_DAY:-$(date +%F)}"
-trap 'rm -rf "$TMP"' EXIT
+PROGRESS="$DATA_DIR/progress.txt"   # current step, read by the Discord bot (status)
+OWN_PROGRESS=0                       # 1 once this run holds the lock and owns $PROGRESS
+trap 'rm -rf "$TMP"; [ "$OWN_PROGRESS" = 1 ] && rm -f "$PROGRESS"' EXIT
 trap 'log "Interrupted (state is saved, the next run will resume from here)"; exit 130' INT TERM
 
 # All messages go to stderr so they never get mixed with data.
 log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >&2; }
 note() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" "$TMP/run.notes" >&2; }
 die()  { log "ERROR: $*"; exit 1; }
+progress() { [ "$OWN_PROGRESS" = 1 ] && printf '%s\n' "$*" > "$PROGRESS" 2>/dev/null; true; }   # progress <text>
+
 
 for cmd in curl awk sed sha256sum od; do command -v "$cmd" >/dev/null || die "missing command: $cmd"; done
 [ -f "$AWK_PARSER" ] || die "parser not found: $AWK_PARSER"
@@ -52,6 +56,8 @@ if command -v flock >/dev/null; then
     exec 9>"$DATA_DIR/.lock"
     flock -n 9 || { log "already running, giving up"; exit 0; }
 fi
+OWN_PROGRESS=1
+progress "🔄 Starting a run"
 
 # ---------------------------------------------------------------- migration from the French version
 # Earlier versions used French file and folder names: rename them once.
@@ -191,6 +197,7 @@ nc_flush() {  # processes the upload queue
     : > "$TMP/queue.fail"
     while IFS=$'\t' read -r op rel dst; do
         cnt=$((cnt + 1)); [ $((cnt % 50)) -eq 0 ] && log "  $cnt / $total"
+        [ $((cnt % 10)) -eq 0 ] && progress "⬆️ Uploading to Nextcloud $cnt/$total"
         if [ "$op" = CPY ]; then nc_copy_now "$rel" "$dst" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\t%s\n' "$op" "$rel" "$dst" >> "$TMP/queue.fail"; }
         elif [ "$op" = DEL ]; then nc_delete_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
         elif [ -f "$FILES/$rel" ]; then nc_put_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
@@ -314,6 +321,7 @@ declare -A WANT_LIST=() WANT_POS=() WANT_NAME=() WANT_AUTHOR=()
 ORDER=()
 for lst in $LISTS; do
     log "Reading list $lst"
+    progress "📜 Reading list $lst"
     if ! curl -sS -m 60 -f "$LIST_BASE_URL/$lst" -o "$TMP/$lst.html"; then
         die "cannot read $LIST_BASE_URL/$lst (nothing was changed)"
     fi
@@ -397,6 +405,7 @@ for id in "${ORDER[@]}"; do
 
     n_done=$((n_done + 1))
     log "Downloading [$n_done/$total] $name ($id)"
+    progress "🔄 Checking levels $n_done/$total"
     rc=0; gd_post downloadGJLevel22.php "levelID=$id" "$TMP/resp" || rc=$?
     [ "$rc" -eq 2 ] && { GD_BLOCKED=1; failed=$((failed + 1)); break; }
     [ "$rc" -eq 0 ] || { failed=$((failed + 1)); continue; }

@@ -147,6 +147,39 @@ def split_messages(lines, header=""):
     return messages
 
 
+def current_progress():
+    """Current step of a running tsl-sync (None if no run in progress)."""
+    path = DATA_DIR / "progress.txt"
+    try:
+        if dt.datetime.now().timestamp() - path.stat().st_mtime > 15 * 60:
+            return None   # stale file (run killed): ignore it
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def last_run_line():
+    path = first_existing(DATA_DIR / "last_run.txt", DATA_DIR / "dernier_passage.txt")
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def presence_text():
+    """Text shown in the bot's Discord status."""
+    step = current_progress()
+    if step:
+        return step
+    last = last_run_line()
+    m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d) — (.*)", last)
+    if not m:
+        return "⏸️ Waiting for the first run"
+    counts = dict((k.strip(), int(v)) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(3)))
+    parts = [f"{counts[k]} {k}" for k in ("modified", "info changed", "deleted", "new") if counts.get(k)]
+    return f"✅ Last run {m.group(1)} {m.group(2)} · {', '.join(parts) if parts else 'no changes'}"
+
+
 def short_log_line(line):
     """'2026-11-10 04:21:07 [tsl] MODIFIED: …' -> '`11-10 04:21` [tsl] MODIFIED: …'"""
     m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d):\d\d (.*)", line)
@@ -158,6 +191,7 @@ class TSLBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
+        self.presence = None
 
     async def setup_hook(self):
         if GUILD_ID:
@@ -180,7 +214,18 @@ class TSLBot(discord.Client):
                 await self.flush_notifications()
             except Exception:  # never stop the loop
                 log.exception("error while posting notifications")
+            try:
+                await self.update_presence()
+            except Exception:
+                log.exception("error while updating the status")
             await asyncio.sleep(30)
+
+    async def update_presence(self):
+        """Shows the run progress / last run in the bot's Discord status."""
+        text = presence_text()[:128]
+        if text != self.presence:
+            await self.change_presence(activity=discord.CustomActivity(name=text))
+            self.presence = text
 
     async def flush_notifications(self):
         files = sorted(NOTIF_DIR.glob("*.txt"))
@@ -284,21 +329,16 @@ async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[s
 
 @bot.tree.command(name="status", description="Result of the last tsl-sync run")
 async def cmd_status(interaction: discord.Interaction):
-    path = first_existing(DATA_DIR / "last_run.txt", DATA_DIR / "dernier_passage.txt")
-    try:
-        last = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        last = "No run recorded yet."
+    last = last_run_line() or "No run recorded yet."
+    step = current_progress()
     state = load_state()
     deleted = sum(1 for s in state.values() if s["status"] == "deleted")
     index = load_index()
     counts = ", ".join(f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS)
-    running = subprocess.run(["systemctl", "is-active", "--quiet", "tsl-sync"], check=False,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     await interaction.response.send_message(
+        f"**Run in progress**: {step if step else 'no'}\n"
         f"**Last run**: {last}\n**Tracked levels**: {counts}\n"
-        f"**Deleted from the GD servers**: {deleted}\n"
-        f"**Run in progress**: {'yes ⏳' if running else 'no'}")
+        f"**Deleted from the GD servers**: {deleted}")
 
 
 @bot.tree.command(name="check", description="Start a check run now")
