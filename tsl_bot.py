@@ -245,11 +245,53 @@ class TSLBot(discord.Client):
         channel = self.get_channel(CHANNEL_ID) or await self.fetch_channel(CHANNEL_ID)
         for path in files:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for msg in split_messages(lines):
-                await channel.send(msg, allowed_mentions=discord.AllowedMentions.none(),
-                                   suppress_embeds=True)
+            for embed in announcement_embeds(lines):
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
                 await asyncio.sleep(1)
             path.unlink()
+
+
+# emojis written by older versions of tsl-sync.sh (only the check mark is kept)
+OLD_EMOJIS = re.compile(r"^(?:📋|✏️|🗑️|♻️|📝|➕|➖|↕️|📦|⚠️|🔄|📜|⬆️)\s*")
+EMBED_MAX = 4000   # embed description limit (4096) with a margin
+
+
+def announcement_embeds(lines):
+    """Turns a notification file (title line, change lines, '_summary_' line) into embeds."""
+    title, footer, body = "TSL", None, []
+    for line in lines:
+        line = OLD_EMOJIS.sub("", line.strip())
+        if not line:
+            continue
+        if "run of" in line and line.replace("*", "").startswith("TSL"):
+            title = line.replace("*", "")
+        elif line.startswith("_") and line.endswith("_") and len(line) > 2:
+            footer = line.strip("_")
+        else:
+            body.append(re.sub(r"\s*\(v\d+\s*→\s*v\d+\)", "", line))   # old "(v2 → v3)"
+    if not body:
+        body = ["✅ No changes."]
+    alarming = any("**Deleted**" in x for x in body)
+    colour = 0xE74C3C if alarming else (0x2ECC71 if body == ["✅ No changes."] else 0x3498DB)
+
+    chunks, current = [], ""
+    for line in body:
+        if len(line) > EMBED_MAX:
+            line = line[: EMBED_MAX - 1] + "…"
+        if current and len(current) + len(line) + 1 > EMBED_MAX:
+            chunks.append(current)
+            current = ""
+        current = f"{current}\n{line}" if current else line
+    chunks.append(current)
+
+    embeds = []
+    for i, chunk in enumerate(chunks):
+        name = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
+        embed = discord.Embed(title=name[:256], description=chunk, colour=colour)
+        if footer and i == len(chunks) - 1:
+            embed.set_footer(text=footer[:2048])
+        embeds.append(embed)
+    return embeds
 
 
 bot = TSLBot()
