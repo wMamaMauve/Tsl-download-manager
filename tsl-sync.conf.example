@@ -26,6 +26,8 @@ DAILY=1
 RECORD_CHECK=1
 # a working video is checked again after this many days (unavailable ones every night)
 RECORD_CHECK_DAYS=3
+# the log of each check (records-log/ in Nextcloud) is kept this many days on the server (Nextcloud keeps all)
+RECORD_LOG_DAYS=30
 
 # --- Discord ------------------------------------------------------------------
 # Bot (recommended): announcements + /level /diff /changes /list /status /run commands

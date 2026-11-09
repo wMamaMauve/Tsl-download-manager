@@ -118,6 +118,8 @@ Every night, the script also checks that the videos of each level can still be w
 
 When a video becomes unavailable (or available again), it is written to `changes.log` and announced on Discord (the first 10, then a count). `/records` lists every unavailable video, and `unavailable_videos.tsv` in Nextcloud holds the same list. The first check takes about 20 minutes and only posts a count; after that, a working video is checked again every 3 days (`RECORD_CHECK_DAYS`) and unavailable ones every night. A video that could not be checked (timeout, YouTube rate limit) keeps its previous status. To disable the check: `RECORD_CHECK=0`.
 
+**Log of every check**: each run writes `records-log/YYYY-MM-DD_HHMM.tsv` (in Nextcloud, opens as a spreadsheet) with **every** video of the site: list, level, level ID, creator, kind (verification / showcase / record), player, link, result (available, private, deleted / unavailable, no access, invalid link), when it was checked (this run, or N days ago and still valid) and whether it is a duplicate. Nextcloud keeps every log; on the server, logs older than 30 days are removed (`RECORD_LOG_DAYS`).
+
 **Duplicate videos**: the same video given for **different players** (one of the two records has the wrong link), or the same record **listed twice** on a level, is reported too (new ones on Discord, all of them in `/records` › Duplicate videos and in `duplicate_videos.tsv`). The same YouTube video written in different ways (`youtu.be/…`, `watch?v=…`, `?si=…`) counts as one. A player's compilation video used for several levels is normal and is not reported.
 
 ## Useful commands

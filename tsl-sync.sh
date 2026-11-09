@@ -540,6 +540,7 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
         [ -f "$TMP/$lst.rec" ] && awk -F'\t' -v OFS='\t' -v L="$lst" '{ print L, $0 }' "$TMP/$lst.rec"
     done | awk -F'\t' '!($2 in owner) { owner[$2] = $1 } owner[$2] == $1' > "$TMP/videos.tsv"
     RECORDS_UNAV="$DATA_DIR/records_unavailable.tsv"
+    VIDEO_CHECK_START=$(date +%s)
     if bash "$RECORD_TOOL" "$TMP/videos.tsv" "$DATA_DIR/records_state.tsv" "$RECORDS_UNAV" > "$TMP/videos.changes"; then
         VIDEOS_CHECKED=1
         total_videos=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
@@ -614,6 +615,36 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
         { printf 'video\treason\tlist\tid\tlevel\tkind\tplayer\tlink\n'; cat "$DUPS"; } > "$FILES/duplicate_videos.tsv"
         nc_put "duplicate_videos.tsv"
     fi
+
+    # log of this run: every video with its level, creator, player and result
+    # (files/records-log/YYYY-MM-DD_HHMM.tsv, kept in Nextcloud; local copies older than RECORD_LOG_DAYS are removed)
+    rlog="records-log/$(date '+%Y-%m-%d_%H%M').tsv"
+    mkdir -p "$FILES/records-log"
+    for lst in $LISTS; do [ -f "$TMP/$lst.tsv" ] && cut -f2,4 "$TMP/$lst.tsv"; done > "$TMP/authors.tsv"
+    : > "$TMP/empty"
+    dupfile="${DUPS:-}"; [ -f "$dupfile" ] || dupfile="$TMP/empty"
+    statefile="$DATA_DIR/records_state.tsv"; [ -f "$statefile" ] || statefile="$TMP/empty"
+    awk -F'\t' -v OFS='\t' -v start="$VIDEO_CHECK_START" -v now="$(date +%s)" '
+        function label(st) {
+            if (st == "ok") return "available"; if (st == "private") return "private"
+            if (st == "deleted") return "deleted / unavailable"; if (st == "noaccess") return "no access"
+            if (st == "invalid") return "invalid link"; return st
+        }
+        FILENAME == ARGV[1] { author[$1] = $2; next }
+        FILENAME == ARGV[2] { st[$1] = $2; at[$1] = $3; next }
+        FILENAME == ARGV[3] { dup[$3 SUBSEP $4 SUBSEP $7 SUBSEP $8] = ($2 == "twice" ? "listed twice" : "same video for different players"); next }
+        FNR == 1 { print "list", "level", "level id", "creator", "video", "player", "link", "result", "checked", "duplicate" }
+        {
+            if ($6 in st) {
+                result = label(st[$6]); d = int((now - at[$6]) / 86400)
+                checked = (at[$6] >= start) ? "this run" : (d == 0 ? "earlier today (still valid)" : d " day" (d > 1 ? "s" : "") " ago (still valid)")
+            } else { result = "could not be checked"; checked = "-" }
+            k = $1 SUBSEP $2 SUBSEP $5 SUBSEP $6
+            print $1, $3, $2, ($2 in author ? author[$2] : "?"), $4, ($5 == "" ? "-" : $5), $6, result, checked, (k in dup ? dup[k] : "-")
+        }' "$TMP/authors.tsv" "$statefile" "$dupfile" "$TMP/videos.tsv" > "$FILES/$rlog"
+    log "  log of the check: $rlog"
+    nc_put "$rlog"
+    find "$FILES/records-log" -name '*.tsv' -mtime +"${RECORD_LOG_DAYS:-30}" -delete 2>/dev/null
 fi
 
 # ---------------------------------------------------------------- 3. index + log
