@@ -95,8 +95,9 @@ def load_index():
             if len(row) < 5:
                 continue
             pos, lid, name, author, rel = row[:5]
+            video = row[5] if len(row) > 5 and row[5].startswith("http") else ""
             levels.append({"list": lst, "position": int(pos) if pos.isdigit() else 0,
-                           "id": lid, "name": name, "author": author, "file": rel})
+                           "id": lid, "name": name, "author": author, "file": rel, "video": video})
     return levels
 
 
@@ -279,16 +280,23 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="Version", value=st.get("version") or "?", inline=True)
     embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
                     inline=True)
+    if lv["video"]:
+        embed.add_field(name="Verification", value=f"[Watch the verification video]({lv['video']})", inline=False)
+    else:
+        embed.set_thumbnail(url=f"https://levelthumbs.prevter.me/thumbnail/{lv['id']}")
     if history:
         embed.add_field(name="Latest changes", value="\n".join(history)[:1024], inline=False)
-    embed.set_thumbnail(url=f"https://levelthumbs.prevter.me/thumbnail/{lv['id']}")
 
+    # The video URL goes in the message text so that Discord shows its player.
+    lines = [lv["video"]] if lv["video"] else []
     path = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
     if path and path.is_file() and path.stat().st_size <= UPLOAD_MAX:
-        await interaction.response.send_message(embed=embed, file=discord.File(path, filename=path.name))
+        await interaction.response.send_message(content="\n".join(lines) or None, embed=embed,
+                                                file=discord.File(path, filename=path.name))
     else:
-        note = None if not path or not path.is_file() else "_(.gmd file too large for Discord, see Nextcloud)_"
-        await interaction.response.send_message(content=note, embed=embed)
+        if path and path.is_file():
+            lines.append("_(.gmd file too large for Discord, see Nextcloud)_")
+        await interaction.response.send_message(content="\n".join(lines) or None, embed=embed)
 
 
 @bot.tree.command(name="changes", description="What changed in the last days")

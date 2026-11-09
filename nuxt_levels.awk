@@ -1,6 +1,7 @@
 # Extracts the levels of a tsl.pages.dev page (Nuxt "__NUXT_DATA__" payload).
 # Input: the JSON content of the payload (a JSON array whose objects reference
-# their values by index). TSV output: position <TAB> id <TAB> name <TAB> author
+# their values by index). TSV output: position <TAB> id <TAB> name <TAB> author <TAB> video
+# (video = URL of the verification video, or of the showcase, or empty)
 # Works with mawk / gawk / busybox awk.
 
 function hexval(h,   i, c, v) {
@@ -35,6 +36,13 @@ function jstr(s,   out, i, c, n, cp, lo) {
     }
     gsub(/\t/, " ", out)
     return out
+}
+# Cleans up a video URL typed by hand on the site (spaces, "ttps://", missing scheme).
+function fixurl(u) {
+    gsub(/^[ \t]+|[ \t]+$/, "", u)
+    if (u ~ /^ttps?:\/\//) u = "h" u
+    if (u ~ /^(www\.|m\.)?(youtube\.com|youtu\.be)\//) u = "https://" u
+    return (u ~ /^https?:\/\/[^ ]+$/) ? u : ""
 }
 { buf = buf $0 }
 END {
@@ -77,6 +85,9 @@ END {
         count++
         pos = ("position" in f) ? el[f["position"]] : count
         if (pos !~ /^[0-9]+$/) pos = count
-        printf "%s\t%s\t%s\t%s\n", pos, id, jstr(el[f["name"]]), jstr(el[f["author"]])
+        video = ("verification" in f) ? fixurl(jstr(el[f["verification"]])) : ""
+        if (video == "" && ("showcase" in f)) video = fixurl(jstr(el[f["showcase"]]))
+        sub(/^https?:\/\/www\.youtu\.be\//, "https://youtu.be/", video)
+        printf "%s\t%s\t%s\t%s\t%s\n", pos, id, jstr(el[f["name"]]), jstr(el[f["author"]]), video
     }
 }
