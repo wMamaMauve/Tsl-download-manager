@@ -560,12 +560,64 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
     view.message = await send(wait=True, **kwargs)
 
 
+def num(n):
+    """1234567 -> '1,234,567'"""
+    try:
+        return f"{int(str(n).replace(',', '')):,}"
+    except ValueError:
+        return str(n)
+
+
+def parse_summary(summary):
+    """Splits the text summary of level_diff.sh into its parts (None if it has another shape)."""
+    if not summary:
+        return None
+    m = re.match(r"^\*\*\+(\d+) / -(\d+) objects(?:, (\d+) moved)? \(([\d,]+) -> ([\d,]+)\)\*\*(?: — (.*))?$",
+                 summary[0])
+    if not m:
+        return None
+    info = {"added": m[1], "removed": m[2], "moved": m[3] or "0", "before": m[4], "after": m[5],
+            "where": m[6] or "", "types": {}, "settings": ""}
+    for line in summary[1:]:
+        key, _, value = line.partition(": ")
+        if key in ("Added", "Removed", "Moved"):
+            info["types"][key] = [x.strip() for x in value.split(", ") if x.strip()]
+        elif key == "Settings changed":
+            info["settings"] = value
+    return info
+
+
+def type_lines(items):
+    """['9303 object #516', '4334 blocks'] -> '9,303 × object #516\n4,334 × blocks'"""
+    out = []
+    for item in items:
+        count, _, name = item.partition(" ")
+        out.append(f"{num(count)} × {name}" if count.isdigit() else item)
+    return "\n".join(out)[:1024] or "—"
+
+
 def diff_embed(lv, path, index, total):
     """Embed and attachment for one diff file of a level (index 0 = newest)."""
     summary, sections = parse_diff(path)
     url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
+    info = parse_summary(summary)
     embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=EMBED_COLOUR,
-                          description="\n".join(summary) or "No details available.")
+                          description=None if info else ("\n".join(summary) or "No details available."))
+    if info:
+        embed.add_field(name="Objects", value=f"{num(info['before'])} → {num(info['after'])}", inline=True)
+        embed.add_field(name="Added", value=f"+{num(info['added'])}", inline=True)
+        embed.add_field(name="Removed", value=f"−{num(info['removed'])}", inline=True)
+        if info["moved"] != "0":
+            embed.add_field(name="Moved", value=num(info["moved"]), inline=True)
+        if info["where"]:
+            where = info["where"].replace(" of the level", "")
+            embed.add_field(name="Where in the level", value=where[:1].upper() + where[1:], inline=False)
+        for key in ("Added", "Removed", "Moved"):
+            if info["types"].get(key):
+                embed.add_field(name=f"{key} objects", value=type_lines(info["types"][key]), inline=True)
+        if info["settings"]:
+            embed.add_field(name="Settings changed", value=info["settings"][:1].upper() + info["settings"][1:],
+                            inline=False)
     embed.add_field(name="Changed on", value=discord_time(path.name[:10], "D"), inline=True)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     preview = []
@@ -575,7 +627,7 @@ def diff_embed(lv, path, index, total):
         embed.add_field(name="First changed objects", value="```\n" + "\n".join(preview)[:990] + "\n```",
                         inline=False)
     if sections.get("SETTINGS"):
-        embed.add_field(name="Settings", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
+        embed.add_field(name="Settings detail", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
                         inline=False)
     where = "" if total == 1 else (" (newest)" if index == 0 else (" (oldest)" if index == total - 1 else ""))
     embed.set_footer(text=f"Change {index + 1}/{total}{where} · "
