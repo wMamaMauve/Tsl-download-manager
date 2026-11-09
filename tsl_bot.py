@@ -29,6 +29,7 @@ from discord import app_commands
 log = logging.getLogger("tsl-bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+EMBED_COLOUR = 0x3083F9    # side bar colour of every embed
 DISCORD_MAX = 1900          # Discord message limit (2000) with a margin
 UPLOAD_MAX = 10 * 1024**2   # max attachment size for a bot
 
@@ -307,8 +308,6 @@ def announcement_embeds(lines):
     if not body:
         body = [NO_CHANGES]
     title = ANNOUNCE_TITLE
-    alarming = any("**Deleted**" in x for x in body)
-    colour = 0xE74C3C if alarming else (0x2ECC71 if body == [NO_CHANGES] else 0x3498DB)
 
     chunks, current = [], ""
     for line in body:
@@ -323,7 +322,7 @@ def announcement_embeds(lines):
     embeds = []
     for i, chunk in enumerate(chunks):
         name = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
-        embeds.append(discord.Embed(title=name[:256], description=chunk, colour=colour))
+        embeds.append(discord.Embed(title=name[:256], description=chunk, colour=EMBED_COLOUR))
     return embeds
 
 
@@ -358,7 +357,7 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     deleted = st.get("status") == "deleted"
 
     embed = discord.Embed(title=lv["name"], url=f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}",
-                          colour=0xE74C3C if deleted else 0x3498DB)
+                          colour=EMBED_COLOUR)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
@@ -527,7 +526,7 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
 
     latest = diffs[0]
     summary, sections = parse_diff(latest)
-    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=0x3498DB,
+    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=EMBED_COLOUR,
                           description="\n".join(summary) or "No details available.")
     embed.add_field(name="Changed on", value=latest.name[:10], inline=True)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
@@ -591,7 +590,7 @@ class ListView(discord.ui.View):
         lines = [f"`#{lv['position']:>3}` [{lv['name']}]({LIST_BASE_URL}/{lv['list']}?level={lv['id']}) "
                  f"— {lv['author']}" for lv in chunk]
         embed = discord.Embed(title=self.list_name, url=f"{LIST_BASE_URL}/{self.list_id}",
-                              description="\n".join(lines) or "This list is empty.", colour=0x3498DB)
+                              description="\n".join(lines) or "This list is empty.", colour=EMBED_COLOUR)
         embed.set_footer(text=f"Page {self.page}/{self.pages} · {len(self.levels)} levels")
         return embed
 
@@ -667,7 +666,7 @@ async def cmd_status(interaction: discord.Interaction):
     state = load_state()
     index = load_index()
 
-    embed = discord.Embed(title="TSL status", colour=0xF1C40F if step else 0x2ECC71)
+    embed = discord.Embed(title="TSL status", colour=EMBED_COLOUR)
     embed.add_field(name="Current run", value=step or "✅ Idle", inline=False)
     if when:
         embed.add_field(name="Last run", value=when, inline=False)
