@@ -293,7 +293,7 @@ class TSLBot(discord.Client):
                 await self.update_presence()
             except Exception:
                 log.exception("error while updating the status")
-            await asyncio.sleep(30)
+            await asyncio.sleep(5)   # status and announcements checked every 5 s
 
     async def update_presence(self):
         """Shows the run progress / last run in the bot's Discord status."""
