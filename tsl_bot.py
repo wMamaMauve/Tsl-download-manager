@@ -203,6 +203,29 @@ def short_log_line(line):
 
 
 # --------------------------------------------------------------------------- bot
+class CopyIdButton(discord.ui.DynamicItem[discord.ui.Button], template=r"tsl:copyid:(?P<level_id>[0-9]+)"):
+    """'Copy ID' button: replies (only to the user who clicks) with the bare level ID, easy to copy.
+    Bots cannot write to the clipboard, so this is the closest Discord allows."""
+
+    def __init__(self, level_id: str):
+        super().__init__(discord.ui.Button(label="Copy ID", style=discord.ButtonStyle.secondary,
+                                           custom_id=f"tsl:copyid:{level_id}"))
+        self.level_id = level_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["level_id"])
+
+    async def callback(self, interaction):
+        await interaction.response.send_message(self.level_id, ephemeral=True)
+
+
+def level_view(level_id):
+    view = discord.ui.View(timeout=None)
+    view.add_item(CopyIdButton(str(level_id)))
+    return view
+
+
 class TSLBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
@@ -216,6 +239,7 @@ class TSLBot(discord.Client):
             await self.tree.sync(guild=guild)
         else:
             await self.tree.sync()
+        self.add_dynamic_items(CopyIdButton)   # buttons keep working after a restart
         self.loop.create_task(self.notification_loop())
 
     async def on_ready(self):
@@ -334,8 +358,8 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
-    embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
-                    inline=True)
+    if deleted:   # the status is only shown when it is worth knowing
+        embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)", inline=True)
     if not lv["has_videos"]:   # index written before videos were recorded: ask the list site
         await interaction.response.defer(thinking=True)   # the site may take a few seconds
         lv["video"], lv["showcase"] = await asyncio.to_thread(videos_from_site, lv["list"], lv["id"])
@@ -354,10 +378,10 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
     path = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
     if path and path.is_file() and path.stat().st_size <= UPLOAD_MAX:
-        await send(embed=embed, file=discord.File(path, filename=path.name))
+        await send(embed=embed, file=discord.File(path, filename=path.name), view=level_view(lv["id"]))
     else:
         note = "_(.gmd file too large for Discord, see Nextcloud)_" if path and path.is_file() else None
-        await send(content=note, embed=embed)
+        await send(content=note, embed=embed, view=level_view(lv["id"]))
 
 
 def youtube_id(url):
