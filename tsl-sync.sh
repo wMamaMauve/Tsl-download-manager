@@ -73,20 +73,23 @@ urlencode() {  # encode chaque octet hors [A-Za-z0-9.~_/-]
 }
 
 GD_BLOCKED=0
-gd_post() {  # gd_post <endpoint> <données> -> réponse sur stdout
+gd_post() {  # gd_post <endpoint> <données> <fichier de sortie>
+    # Les réponses (parfois plusieurs Mo) restent dans des fichiers : les manipulations
+    # de chaînes de bash sont beaucoup trop lentes sur de gros textes.
     # code retour : 0 = ok, 1 = erreur sur ce niveau, 2 = serveurs GD saturés / limite atteinte
-    local ep="$1" data="$2" resp err try wait
+    local ep="$1" data="$2" out="$3" head err try wait
     for try in 1 2 3; do
         sleep "$DELAY"
-        resp="$(curl -sS -m 180 -A "" -X POST "$GD_SERVER/$ep" -d "$data&secret=$GD_SECRET" 2>"$TMP/curl.err")" || resp=""
-        case "$resp" in
+        curl -sS -m 180 -A "" -X POST "$GD_SERVER/$ep" -d "$data&secret=$GD_SECRET" -o "$out" 2>"$TMP/curl.err" || : > "$out"
+        head="$(head -c 120 "$out" | tr -d '\r\n')"
+        case "$head" in
             ""|"error code: 1015"*|"error code: 429"*|"error code: 1020"*)
-                err="${resp:-$(tr '\n' ' ' < "$TMP/curl.err")}"; err="${err:-réponse vide}"
+                err="${head:-$(tr '\n' ' ' < "$TMP/curl.err")}"; err="${err:-réponse vide}"
                 wait=$((try * 60))
-                log "  serveurs GD : ${err:0:120} — nouvelle tentative dans $wait s ($try/3)"
+                log "  serveurs GD : $err — nouvelle tentative dans $wait s ($try/3)"
                 sleep "$wait" ;;
-            "error code:"*) log "  serveurs GD : ${resp:0:120}"; return 1 ;;
-            *) printf '%s' "$resp"; return 0 ;;
+            "error code:"*) log "  serveurs GD : $head"; return 1 ;;
+            *) return 0 ;;
         esac
     done
     log "  Les serveurs GD refusent les requêtes (limite atteinte). Arrêt des téléchargements pour ce passage ;"
@@ -219,23 +222,23 @@ if [ "$FORCE" != 1 ] && [ "${#ST_VER[@]}" -gt 0 ]; then   # inutile au tout prem
     for ((i = 0; i < ${#ORDER[@]}; i += 10)); do
         [ $((i % 100)) -eq 0 ] && [ "$i" -gt 0 ] && log "  $i / ${#ORDER[@]}"
         batch="$(IFS=,; echo "${ORDER[*]:i:10}")"
-        rc=0; resp="$(gd_post getGJLevels21.php "type=10&str=$batch")" || rc=$?
+        rc=0; gd_post getGJLevels21.php "type=10&str=$batch" "$TMP/search" || rc=$?
         [ "$rc" -eq 2 ] && { GD_BLOCKED=1; break; }
         [ "$rc" -eq 0 ] || continue
-        [ "${resp:0:2}" = "-1" ] && continue
+        [ "$(head -c 2 "$TMP/search")" = "-1" ] && continue
         # niveaux séparés par "|", avant le premier "#" ; champs clé:valeur ; 1 = id, 5 = version
         while IFS=$'\t' read -r gid gver; do
             [ -n "$gid" ] && GD_VER[$gid]="$gver"
-        done < <(printf '%s' "${resp%%#*}" | tr '|' '\n' | awk -F: '{ id = ""; v = "";
+        done < <(cut -d'#' -f1 "$TMP/search" | tr '|' '\n' | awk -F: '{ id = ""; v = "";
             for (j = 1; j < NF; j += 2) { if ($j == "1") id = $(j + 1); else if ($j == "5") v = $(j + 1) }
             if (id != "") print id "\t" v }')
     done
 fi
 
 # ---------------------------------------------------------------- 3. téléchargements
-make_gmd() {  # make_gmd <réponse brute> <nom> <auteur> <fichier>
-    local raw="${1%%#*}" name="$2" author="$3" out="$4"
-    printf '%s' "$raw" | awk -F: -v NAME="$(xml_escape "$name")" -v AUTHOR="$(xml_escape "$author")" '
+make_gmd() {  # make_gmd <fichier réponse (partie niveau)> <nom> <auteur> <fichier>
+    local raw="$1" name="$2" author="$3" out="$4"
+    awk -F: -v NAME="$(xml_escape "$name")" -v AUTHOR="$(xml_escape "$author")" '
     { for (j = 1; j < NF; j += 2) f[$j] = $(j + 1) }
     END {
         if (f["4"] == "") exit 1
@@ -247,7 +250,7 @@ make_gmd() {  # make_gmd <réponse brute> <nom> <auteur> <fichier>
         if (f["12"] + 0 > 0) printf "<k>k8</k><i>%d</i>", f["12"]
         if (f["35"] + 0 > 0) printf "<k>k45</k><i>%d</i>", f["35"]
         printf "</dict></plist>"
-    }' > "$out"
+    }' "$raw" > "$out"
 }
 
 new=0; updated=0; same=0; failed=0; n_done=0
@@ -269,17 +272,18 @@ for id in "${ORDER[@]}"; do
 
     n_done=$((n_done + 1))
     log "Téléchargement [$n_done] $name ($id)"
-    rc=0; resp="$(gd_post downloadGJLevel22.php "levelID=$id")" || rc=$?
+    rc=0; gd_post downloadGJLevel22.php "levelID=$id" "$TMP/resp" || rc=$?
     [ "$rc" -eq 2 ] && { GD_BLOCKED=1; failed=$((failed + 1)); break; }
     [ "$rc" -eq 0 ] || { failed=$((failed + 1)); continue; }
-    if [ "${resp:0:2}" = "-1" ] || [ "${resp:0:2}" != "1:" ]; then
+    if [ "$(head -c 2 "$TMP/resp")" != "1:" ]; then
         log "  niveau introuvable sur les serveurs GD (supprimé ou privé ?)"; failed=$((failed + 1)); continue
     fi
-    if ! make_gmd "$resp" "$name" "$author" "$TMP/level.gmd"; then
+    cut -d'#' -f1 "$TMP/resp" | tr -d '\r\n' > "$TMP/raw"   # partie niveau (avant le premier #)
+    if ! make_gmd "$TMP/raw" "$name" "$author" "$TMP/level.gmd"; then
         log "  réponse invalide, ignoré"; failed=$((failed + 1)); continue
     fi
-    ver="$(printf '%s' "${resp%%#*}" | awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "5") print $(j + 1) }')"
-    sha="$(printf '%s' "${resp%%#*}" | awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "4") printf "%s", $(j + 1) }' \
+    ver="$(awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "5") print $(j + 1) }' "$TMP/raw")"
+    sha="$(awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "4") printf "%s", $(j + 1) }' "$TMP/raw" \
         | sha256sum | cut -d' ' -f1)"
 
     if [ -z "${ST_SHA[$id]:-}" ] || [ ! -f "$FILES/${ST_FILE[$id]:-/nonexistent}" ]; then
