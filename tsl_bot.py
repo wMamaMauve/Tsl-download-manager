@@ -430,7 +430,8 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
     embed.set_footer(text="The attached file lists every added, removed and moved object.")
 
     if latest.stat().st_size <= UPLOAD_MAX:
-        await interaction.response.send_message(embed=embed, file=discord.File(latest, filename=latest.name))
+        filename = re.sub(r'[\\/:*?"<>|]', "_", f"{lv['name']} - changes {latest.name[:10]}.txt")
+        await interaction.response.send_message(embed=embed, file=discord.File(latest, filename=filename))
     else:
         await interaction.response.send_message(content="_(full list too large for Discord, see Nextcloud)_",
                                                 embed=embed)
