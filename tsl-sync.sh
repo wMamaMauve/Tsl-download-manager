@@ -18,7 +18,7 @@ LISTS="${LISTS:-tsl tslplus}"
 LIST_BASE_URL="${LIST_BASE_URL:-https://tsl.pages.dev/list}"
 GD_SERVER="${GD_SERVER:-https://www.boomlings.com/database}"
 GD_SECRET="${GD_SECRET:-Wmfd2893gb7}"
-DELAY="${DELAY:-2}"              # pause (secondes) entre deux requêtes aux serveurs GD
+DELAY="${DELAY:-3}"              # pause (secondes) entre deux requêtes aux serveurs GD
 FORCE="${FORCE:-0}"              # 1 = re-télécharger tous les niveaux pour comparer
 NC_URL="${NC_URL:-}"             # ex : https://cloud.exemple.fr  (vide = pas d'envoi)
 NC_USER="${NC_USER:-}"
@@ -33,10 +33,12 @@ LOG="$DATA_DIR/changements.log"
 FILES="$DATA_DIR/fichiers"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+trap 'log "Interrompu (l'"'"'état est sauvegardé, le prochain passage reprendra ici)"; exit 130' INT TERM
 
-log()  { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
-note() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
-die()  { log "ERREUR: $*" >&2; exit 1; }
+# Tous les messages vont sur la sortie d'erreur, pour ne jamais se mélanger aux données.
+log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >&2; }
+note() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+die()  { log "ERREUR: $*"; exit 1; }
 
 for cmd in curl awk sed sha256sum od; do command -v "$cmd" >/dev/null || die "commande manquante : $cmd"; done
 [ -f "$AWK_PARSER" ] || die "parser introuvable : $AWK_PARSER"
@@ -70,19 +72,26 @@ urlencode() {  # encode chaque octet hors [A-Za-z0-9.~_/-]
         } }'
 }
 
-gd_post() {  # gd_post <endpoint> <données> -> réponse sur stdout ; gère la limite de requêtes
-    local ep="$1" data="$2" resp try
-    for try in 1 2 3 4; do
+GD_BLOCKED=0
+gd_post() {  # gd_post <endpoint> <données> -> réponse sur stdout
+    # code retour : 0 = ok, 1 = erreur sur ce niveau, 2 = serveurs GD saturés / limite atteinte
+    local ep="$1" data="$2" resp err try wait
+    for try in 1 2 3; do
         sleep "$DELAY"
-        resp="$(curl -sS -m 60 -A "" -X POST "$GD_SERVER/$ep" \
-            -d "$data&gameVersion=22&binaryVersion=42&secret=$GD_SECRET")" || resp=""
+        resp="$(curl -sS -m 180 -A "" -X POST "$GD_SERVER/$ep" -d "$data&secret=$GD_SECRET" 2>"$TMP/curl.err")" || resp=""
         case "$resp" in
-            ""|"error code: 1015"*|"error code: 429"*) log "  serveur GD indisponible / limite atteinte, nouvelle tentative dans $((try * 30)) s"; sleep $((try * 30)) ;;
-            "error code:"*) log "  serveur GD : $resp"; return 1 ;;
+            ""|"error code: 1015"*|"error code: 429"*|"error code: 1020"*)
+                err="${resp:-$(tr '\n' ' ' < "$TMP/curl.err")}"; err="${err:-réponse vide}"
+                wait=$((try * 60))
+                log "  serveurs GD : ${err:0:120} — nouvelle tentative dans $wait s ($try/3)"
+                sleep "$wait" ;;
+            "error code:"*) log "  serveurs GD : ${resp:0:120}"; return 1 ;;
             *) printf '%s' "$resp"; return 0 ;;
         esac
     done
-    return 1
+    log "  Les serveurs GD refusent les requêtes (limite atteinte). Arrêt des téléchargements pour ce passage ;"
+    log "  ce qui est déjà téléchargé est conservé et le prochain passage reprendra la suite."
+    return 2
 }
 
 # ---------------------------------------------------------------- Nextcloud
@@ -210,7 +219,9 @@ if [ "$FORCE" != 1 ] && [ "${#ST_VER[@]}" -gt 0 ]; then   # inutile au tout prem
     for ((i = 0; i < ${#ORDER[@]}; i += 10)); do
         [ $((i % 100)) -eq 0 ] && [ "$i" -gt 0 ] && log "  $i / ${#ORDER[@]}"
         batch="$(IFS=,; echo "${ORDER[*]:i:10}")"
-        resp="$(gd_post getGJLevels21.php "type=10&str=$batch")" || continue
+        rc=0; resp="$(gd_post getGJLevels21.php "type=10&str=$batch")" || rc=$?
+        [ "$rc" -eq 2 ] && { GD_BLOCKED=1; break; }
+        [ "$rc" -eq 0 ] || continue
         [ "${resp:0:2}" = "-1" ] && continue
         # niveaux séparés par "|", avant le premier "#" ; champs clé:valeur ; 1 = id, 5 = version
         while IFS=$'\t' read -r gid gver; do
@@ -258,7 +269,9 @@ for id in "${ORDER[@]}"; do
 
     n_done=$((n_done + 1))
     log "Téléchargement [$n_done] $name ($id)"
-    resp="$(gd_post downloadGJLevel22.php "levelID=$id")" || { failed=$((failed + 1)); continue; }
+    rc=0; resp="$(gd_post downloadGJLevel22.php "levelID=$id")" || rc=$?
+    [ "$rc" -eq 2 ] && { GD_BLOCKED=1; failed=$((failed + 1)); break; }
+    [ "$rc" -eq 0 ] || { failed=$((failed + 1)); continue; }
     if [ "${resp:0:2}" = "-1" ] || [ "${resp:0:2}" != "1:" ]; then
         log "  niveau introuvable sur les serveurs GD (supprimé ou privé ?)"; failed=$((failed + 1)); continue
     fi
