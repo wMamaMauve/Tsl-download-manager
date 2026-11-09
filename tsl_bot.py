@@ -181,42 +181,12 @@ def current_progress():
         return None
 
 
-def last_run_line():
-    path = first_existing(DATA_DIR / "last_run.txt", DATA_DIR / "dernier_passage.txt")
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
-def presence_text():
-    """Text shown in the bot's Discord status."""
-    step = current_progress()
-    if step:
-        return step
-    last = last_run_line()
-    m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d) — (.*)", last)
-    if not m:
-        return "Waiting for the first run"
-    counts = dict((k.strip(), int(v)) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(3)))
-    parts = [f"{counts[k]} {k}" for k in ("modified", "info changed", "deleted", "new") if counts.get(k)]
-    try:
-        when = time_ago(dt.datetime.strptime(last[:16], "%Y-%m-%d %H:%M"))
-    except ValueError:
-        when = f"{m.group(1)} {m.group(2)}"
-    return f"✅ Last run {when} · {', '.join(parts) if parts else 'no changes'}"
-
-
-def time_ago(moment):
-    """datetime (server local time) -> 'just now', '12 min ago', '3 h ago', '2 days ago'."""
-    minutes = int((dt.datetime.now() - moment).total_seconds() // 60)
-    if minutes < 1:
-        return "just now"
-    if minutes < 60:
-        return f"{minutes} min ago"
-    if minutes < 48 * 60:
-        return f"{minutes // 60} h ago"
-    return f"{minutes // 1440} days ago"
+def idle_activity_text():
+    """'Shitty NETWORK on TSL': the #1 level of the first list (followed if the ranking changes)."""
+    first = LISTS[0] if LISTS else "tsl"
+    top = [lv for lv in load_index() if lv["list"] == first and lv["position"] == 1]
+    label = "TSL" if first == "tsl" else ("TSL+" if first == "tslplus" else first)
+    return (f"{top[0]['name']} on {label}" if top else "The Shitty List")[:128]
 
 
 def discord_time(text, style="f"):
@@ -296,10 +266,15 @@ class TSLBot(discord.Client):
             await asyncio.sleep(5)   # status and announcements checked every 5 s
 
     async def update_presence(self):
-        """Shows the run progress / last run in the bot's Discord status."""
-        text = presence_text()[:128]
+        """During a run: its progress as custom status. Otherwise: "Watching <#1 of TSL> on TSL"."""
+        step = current_progress()
+        if step:
+            text, activity = step[:128], discord.CustomActivity(name=step[:128])
+        else:
+            text = idle_activity_text()
+            activity = discord.Activity(type=discord.ActivityType.watching, name=text)
         if text != self.presence:
-            await self.change_presence(activity=discord.CustomActivity(name=text))
+            await self.change_presence(activity=activity)
             self.presence = text
 
     async def flush_notifications(self):
