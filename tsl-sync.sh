@@ -262,7 +262,7 @@ bot_queue() {  # leaves the announcements for the Discord bot
     mkdir -p "$DATA_DIR/notifications"
     local f="$DATA_DIR/notifications/$(date +%Y%m%d-%H%M%S)-$$"
     { printf '**TSL** — run of %s\n' "$(date '+%Y-%m-%d %H:%M')"
-      if [ -s "$TMP/discord.txt" ]; then cat "$TMP/discord.txt"; else echo "✅ No changes."; fi
+      if [ -s "$TMP/discord.txt" ]; then cat "$TMP/discord.txt"; else echo "✅ No changes were detected."; fi
       printf '_%s_\n' "$1"; } > "$f.tmp" && mv "$f.tmp" "$f.txt"
 }
 
@@ -271,15 +271,15 @@ discord_send() {  # sends the collected announcements, in messages under 2000 ch
     [ -n "$DISCORD_WEBHOOK" ] || return 0
     local summary="$1" msg line
     if [ ! -s "$TMP/discord.txt" ]; then
-        [ "$DISCORD_ALWAYS" = 1 ] && discord_post "✅ **TSL** — run of $(date '+%Y-%m-%d %H:%M'): no changes (${summary})"
+        [ "$DISCORD_ALWAYS" = 1 ] && discord_post "**TSL Tracking result**"$'\n'"✅ No changes were detected."
         return 0
     fi
-    msg="**TSL** — run of $(date '+%Y-%m-%d %H:%M')"
+    msg="**TSL Tracking result**"
     while IFS= read -r line; do
         if [ $(( ${#msg} + ${#line} + 1 )) -gt 1900 ]; then discord_post "$msg"; msg=""; fi
         msg="${msg:+$msg$'\n'}$line"
     done < "$TMP/discord.txt"
-    discord_post "$msg"$'\n'"_${summary}_"
+    discord_post "$msg"
     log "Discord announcements sent"
 }
 

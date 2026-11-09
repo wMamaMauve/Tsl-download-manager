@@ -285,23 +285,30 @@ OLD_EMOJIS = re.compile(r"^(?:📋|✏️|🗑️|♻️|📝|➕|➖|↕️|�
 EMBED_MAX = 4000   # embed description limit (4096) with a margin
 
 
+ANNOUNCE_TITLE = "TSL Tracking result"
+NO_CHANGES = "✅ No changes were detected."
+
+
 def announcement_embeds(lines):
-    """Turns a notification file (title line, change lines, '_summary_' line) into embeds."""
-    title, footer, body = "TSL", None, []
+    """Turns a notification file (title line, change lines, '_summary_' line) into embeds.
+    The title and summary lines written by tsl-sync.sh are not shown."""
+    body = []
     for line in lines:
         line = OLD_EMOJIS.sub("", line.strip())
         if not line:
             continue
         if "run of" in line and line.replace("*", "").startswith("TSL"):
-            title = line.replace("*", "")
-        elif line.startswith("_") and line.endswith("_") and len(line) > 2:
-            footer = line.strip("_")
-        else:
-            body.append(re.sub(r"\s*\(v\d+\s*→\s*v\d+\)", "", line))   # old "(v2 → v3)"
+            continue   # "TSL — run of <date>": replaced by a fixed title
+        if line.startswith("_") and line.endswith("_") and len(line) > 2:
+            continue   # summary line ("0 new, 1 modified, ...")
+        if line in ("✅ No changes.", "No changes.", NO_CHANGES):
+            continue
+        body.append(re.sub(r"\s*\(v\d+\s*→\s*v\d+\)", "", line))   # old "(v2 → v3)"
     if not body:
-        body = ["✅ No changes."]
+        body = [NO_CHANGES]
+    title = ANNOUNCE_TITLE
     alarming = any("**Deleted**" in x for x in body)
-    colour = 0xE74C3C if alarming else (0x2ECC71 if body == ["✅ No changes."] else 0x3498DB)
+    colour = 0xE74C3C if alarming else (0x2ECC71 if body == [NO_CHANGES] else 0x3498DB)
 
     chunks, current = [], ""
     for line in body:
@@ -316,10 +323,7 @@ def announcement_embeds(lines):
     embeds = []
     for i, chunk in enumerate(chunks):
         name = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
-        embed = discord.Embed(title=name[:256], description=chunk, colour=colour)
-        if footer and i == len(chunks) - 1:
-            embed.set_footer(text=footer[:2048])
-        embeds.append(embed)
+        embeds.append(discord.Embed(title=name[:256], description=chunk, colour=colour))
     return embeds
 
 
