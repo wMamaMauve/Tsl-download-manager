@@ -288,16 +288,17 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     if history:
         embed.add_field(name="Latest changes", value="\n".join(history)[:1024], inline=False)
 
-    # The video URL goes in the message text so that Discord shows its player.
-    lines = [lv["video"]] if lv["video"] else []
     path = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
     if path and path.is_file() and path.stat().st_size <= UPLOAD_MAX:
-        await interaction.response.send_message(content="\n".join(lines) or None, embed=embed,
-                                                file=discord.File(path, filename=path.name))
+        await interaction.response.send_message(embed=embed, file=discord.File(path, filename=path.name))
     else:
-        if path and path.is_file():
-            lines.append("_(.gmd file too large for Discord, see Nextcloud)_")
-        await interaction.response.send_message(content="\n".join(lines) or None, embed=embed)
+        note = "_(.gmd file too large for Discord, see Nextcloud)_" if path and path.is_file() else None
+        await interaction.response.send_message(content=note, embed=embed)
+    # The video is sent as a separate message containing only its URL: Discord always
+    # shows the YouTube player for such a message (it may not when the URL sits next to
+    # a bot embed).
+    if lv["video"]:
+        await interaction.followup.send(lv["video"])
 
 
 @bot.tree.command(name="changes", description="What changed in the last days")
