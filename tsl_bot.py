@@ -563,62 +563,38 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
         await send(content="_(full list too large for Discord, see Nextcloud)_", embed=embed)
 
 
-@bot.tree.command(name="changes", description="What changed in the last days")
-@app_commands.describe(days="Number of days (default: 7)", everything="Also include ranking changes")
-async def cmd_changes(interaction: discord.Interaction, days: app_commands.Range[int, 1, 365] = 7,
-                      everything: bool = False):
-    since = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
-    lines = [line for line in load_log() if line[:10] >= since
-             and (everything or any(f"] {k}" in line for k in IMPORTANT))]
-    if not lines:
-        await interaction.response.send_message(f"No changes in the last {days} days.")
-        return
-    msgs = split_messages([short_log_line(x) for x in lines[-200:]],
-                          header=f"**Changes in the last {days} days** ({len(lines)})")
-    await interaction.response.send_message(msgs[0], allowed_mentions=discord.AllowedMentions.none())
-    for msg in msgs[1:5]:
-        await interaction.followup.send(msg, allowed_mentions=discord.AllowedMentions.none())
-    if len(msgs) > 5:
-        await interaction.followup.send("… list truncated, use a smaller number of days.")
+class PagedView(discord.ui.View):
+    """An embed split in pages, with First / Previous / Next / Last buttons.
+    Only the user who ran the command can use the buttons; they are disabled after 5 minutes."""
 
-
-PAGE_SIZE = 25
-
-
-class ListView(discord.ui.View):
-    """One page of a list, with buttons to change page (only for the user who asked)."""
-
-    def __init__(self, list_id, list_name, page, owner_id):
+    def __init__(self, title, pages, owner_id, command, footer="", url=None):
         super().__init__(timeout=300)
-        self.list_id, self.list_name, self.owner_id = list_id, list_name, owner_id
-        self.levels = sorted((lv for lv in load_index() if lv["list"] == list_id), key=lambda x: x["position"])
-        self.pages = max(1, (len(self.levels) + PAGE_SIZE - 1) // PAGE_SIZE)
-        self.page = min(max(page, 1), self.pages)
+        self.title, self.pages, self.owner_id, self.command = title, pages or ["Nothing to show."], owner_id, command
+        self.footer, self.url = footer, url
+        self.page = 1
         self.message = None
         self.refresh_buttons()
 
     def embed(self):
-        chunk = self.levels[(self.page - 1) * PAGE_SIZE: self.page * PAGE_SIZE]
-        lines = [f"`#{lv['position']:>3}` [{lv['name']}]({LIST_BASE_URL}/{lv['list']}?level={lv['id']}) "
-                 f"— {lv['author']}" for lv in chunk]
-        embed = discord.Embed(title=self.list_name, url=f"{LIST_BASE_URL}/{self.list_id}",
-                              description="\n".join(lines) or "This list is empty.", colour=EMBED_COLOUR)
-        embed.set_footer(text=f"Page {self.page}/{self.pages} · {len(self.levels)} levels")
+        embed = discord.Embed(title=self.title, url=self.url, description=self.pages[self.page - 1],
+                              colour=EMBED_COLOUR)
+        footer = f"Page {self.page}/{len(self.pages)}"
+        embed.set_footer(text=f"{footer} · {self.footer}" if self.footer else footer)
         return embed
 
     def refresh_buttons(self):
         self.first.disabled = self.previous.disabled = self.page <= 1
-        self.next.disabled = self.last.disabled = self.page >= self.pages
+        self.next.disabled = self.last.disabled = self.page >= len(self.pages)
 
     async def interaction_check(self, interaction):
         if interaction.user.id == self.owner_id:
             return True
-        await interaction.response.send_message("These buttons belong to whoever used /list — "
-                                                "run /list yourself to browse.", ephemeral=True)
+        await interaction.response.send_message(f"These buttons belong to whoever used {self.command} — "
+                                                f"run {self.command} yourself to browse.", ephemeral=True)
         return False
 
     async def show(self, interaction, page):
-        self.page = min(max(page, 1), self.pages)
+        self.page = min(max(page, 1), len(self.pages))
         self.refresh_buttons()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
@@ -636,7 +612,7 @@ class ListView(discord.ui.View):
 
     @discord.ui.button(label="Last", style=discord.ButtonStyle.secondary)
     async def last(self, interaction, _button):
-        await self.show(interaction, self.pages)
+        await self.show(interaction, len(self.pages))
 
     async def on_timeout(self):
         for item in self.children:
@@ -647,28 +623,58 @@ class ListView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
+    async def send(self, interaction, start_page=1):
+        self.page = min(max(start_page, 1), len(self.pages))
+        self.refresh_buttons()
+        await interaction.response.send_message(embed=self.embed(), view=self,
+                                                allowed_mentions=discord.AllowedMentions.none())
+        self.message = await interaction.original_response()
+
+
+def paginate(lines, per_page, max_chars=3800):
+    """Groups lines into pages of at most per_page lines and max_chars characters."""
+    pages, current = [], []
+    for line in lines:
+        line = line if len(line) <= max_chars else line[: max_chars - 1] + "…"
+        if current and (len(current) >= per_page or len("\n".join(current + [line])) > max_chars):
+            pages.append("\n".join(current))
+            current = []
+        current.append(line)
+    if current:
+        pages.append("\n".join(current))
+    return pages
+
+
+@bot.tree.command(name="changes", description="What changed in the last days")
+@app_commands.describe(days="Number of days (default: 7)", everything="Also include ranking changes")
+async def cmd_changes(interaction: discord.Interaction, days: app_commands.Range[int, 1, 365] = 7,
+                      everything: bool = False):
+    since = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    lines = [line for line in load_log() if line[:10] >= since
+             and (everything or any(f"] {k}" in line for k in IMPORTANT))]
+    if not lines:
+        await interaction.response.send_message(
+            "No changes in the last day." if days == 1 else f"No changes in the last {days} days.")
+        return
+    lines = [strip_versions(short_log_line(x)) for x in reversed(lines)]   # newest first
+    period = "the last day" if days == 1 else f"the last {days} days"
+    noun = "change" if len(lines) == 1 else "changes"
+    view = PagedView(f"Changes in {period}", paginate(lines, 15), interaction.user.id, "/changes",
+                     footer=f"{len(lines)} {noun} in {period}")
+    await view.send(interaction)
+
 
 @bot.tree.command(name="list", description="Show the ranking")
 @app_commands.describe(name="Which list", page="Page to start on (25 levels per page)")
 @app_commands.choices(name=[app_commands.Choice(name=LIST_NAMES.get(x, x), value=x) for x in LISTS])
 async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[str],
                    page: app_commands.Range[int, 1, 100] = 1):
-    view = ListView(name.value, name.name, page, interaction.user.id)
-    await interaction.response.send_message(embed=view.embed(), view=view,
-                                            allowed_mentions=discord.AllowedMentions.none())
-    view.message = await interaction.original_response()
-
-
-def last_run_counts():
-    """('2026-11-10 04:52', {'new': 0, 'modified': 1, ...}) from last_run.txt, or (None, {})."""
-    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d) — (.*)", last_run_line())
-    if not m:
-        return None, {}
-    return m.group(1), {k.strip(): int(v) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(2))}
-
-
-def last_run_modified():
-    return [row for row in read_tsv(DATA_DIR / "last_run_modified.tsv") if len(row) >= 3]
+    levels = sorted((lv for lv in load_index() if lv["list"] == name.value), key=lambda x: x["position"])
+    lines = [f"`#{lv['position']:>3}` [{lv['name']}]({LIST_BASE_URL}/{lv['list']}?level={lv['id']}) "
+             f"— {lv['author']}" for lv in levels]
+    view = PagedView(name.name, paginate(lines, 25) or ["This list is empty."], interaction.user.id, "/list",
+                     footer=f"{len(levels)} levels", url=f"{LIST_BASE_URL}/{name.value}")
+    await view.send(interaction, page)
 
 
 @bot.tree.command(name="status", description="Result of the last tsl-sync run")
