@@ -150,6 +150,7 @@ def find_levels(query):
 # log keywords (English, plus the French ones written by older versions)
 IMPORTANT = ("MODIFIED", "INFO CHANGED", "DELETED", "REAPPEARED", "ENTERED", "LEFT",
              "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN", "DUPLICATE VIDEO", "WRONG LEVEL?",
+             "CHECKED BY HAND",
              "MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE")
 
 
@@ -1127,9 +1128,22 @@ WRONG_FILE = "records_wrong_level.tsv"
 NAME_OK_FILE = "records_name_ok.tsv"
 
 
+NAME_OK_KEYS = ("id", "key", "user", "when", "user_id", "list", "level", "kind", "player", "link", "title", "named")
+
+
 def load_name_ok():
     """{(level id, video key)} validated by hand: never reported as on the wrong level."""
     return {(row[0], row[1]) for row in read_tsv(DATA_DIR / NAME_OK_FILE) if len(row) >= 2}
+
+
+def load_name_ok_log():
+    """Every validation, oldest first, as dicts (traceability: who, Discord ID, when, what)."""
+    return [dict(zip(NAME_OK_KEYS, row + [""] * (len(NAME_OK_KEYS) - len(row))))
+            for row in read_tsv(DATA_DIR / NAME_OK_FILE) if len(row) >= 2]
+
+
+def clean_field(text):
+    return re.sub(r"[\t\r\n]+", " ", str(text or "")).strip() or "-"
 
 
 def load_wrong_level():
@@ -1163,18 +1177,35 @@ class ValidateNameButton(discord.ui.DynamicItem[discord.ui.Button],
             await interaction.response.send_message("Only server managers can validate a record.", ephemeral=True)
             return
         key = f"youtube:{self.yt}"
-        if (self.level_id, key) not in load_name_ok():
-            with open(DATA_DIR / NAME_OK_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{self.level_id}\t{key}\t{interaction.user}\t{dt.date.today().isoformat()}\n")
-        # take it out of the current list right away (the next run would do it anyway)
         path = DATA_DIR / WRONG_FILE
         rows = read_tsv(path)
-        kept = [row for row in rows if not (len(row) >= 6 and row[1] == self.level_id and video_key(row[5]) == key)]
+        mine = [row for row in rows if len(row) >= 6 and row[1] == self.level_id and video_key(row[5]) == key]
+        if (self.level_id, key) not in load_name_ok():
+            # traceability: who (name + Discord ID), when, and exactly what was validated
+            w = (mine[0] + [""] * 8)[:8] if mine else ["", self.level_id, "", "", "", f"https://youtu.be/{self.yt}", "", ""]
+            now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fields = [self.level_id, key, interaction.user, now, interaction.user.id,
+                      w[0], w[2], w[3], w[4], w[5], w[6], w[7]]
+            with open(DATA_DIR / NAME_OK_FILE, "a", encoding="utf-8") as f:
+                f.write("\t".join(clean_field(x) for x in fields) + "\n")
+            label = video_label(w[3], w[4]).lower() if w[3] else "video"
+            line = (f"{now} [{w[0] or '?'}] CHECKED BY HAND: {label} on {w[2] or '?'} ({self.level_id}) — "
+                    f"title names {w[7] or '?'}, validated by {interaction.user} (Discord ID {interaction.user.id}) "
+                    f"{w[5]}")
+            try:
+                with open(first_existing(DATA_DIR / "changes.log", DATA_DIR / "changements.log"), "a",
+                          encoding="utf-8") as f:
+                    f.write(clean_field(line) + "\n")
+            except OSError:
+                log.exception("could not write the validation to changes.log")
+        # take it out of the current list right away (the next run would do it anyway)
+        kept = [row for row in rows if row not in mine]
         if len(kept) != len(rows):
             tmp = path.with_suffix(".tmp")
             tmp.write_text("".join("\t".join(row) + "\n" for row in kept), encoding="utf-8")
             tmp.replace(path)
-        log.info("%s validated the level of video %s on level %s", interaction.user, key, self.level_id)
+        log.info("%s (Discord ID %s) validated the level of video %s on level %s", interaction.user,
+                 interaction.user.id, key, self.level_id)
         rendered = video_message(key)
         if rendered:
             embed, view = rendered
@@ -1193,7 +1224,7 @@ def video_message(key):
     if not matches:
         return None
     wrong = {(w["id"], video_key(w["link"])): w for w in (load_wrong_level() or [])}
-    ok = load_name_ok()
+    ok = {(v["id"], v["key"]): v for v in load_name_ok_log()}
     positions = {(lv["list"], lv["id"]): lv["position"] for lv in load_index()}
     first = matches[0]
     title = first.get("title", "-")
@@ -1223,7 +1254,9 @@ def video_message(key):
             if yt and len(view.children) < 25:
                 view.add_item(ValidateNameButton(r["level id"], yt, f"Validate: {player or 'video'} on {r['level']}"))
         elif (r["level id"], key) in ok:
-            value += "\n✅ Level checked by hand"
+            v = ok[(r["level id"], key)]
+            who = f"<@{v['user_id']}> ({v['user']})" if v["user_id"].isdigit() else v["user"]
+            value += f"\n✅ Level checked by hand by {who} on {discord_time(v['when'], 'f')}"
         embed.add_field(name=video_label(r["video"], player)[:256], inline=False, value=value[:1024])
     m = re.fullmatch(r"(\d{4}-\d\d-\d\d)_(\d\d)(\d\d)", when)
     footer = f"From the check of {m.group(1)} {m.group(2)}:{m.group(3)}" if m else f"From the check {when}"
@@ -1249,6 +1282,38 @@ async def cmd_video(interaction: discord.Interaction, link: str):
     if view:
         kwargs["view"] = view
     await interaction.response.send_message(**kwargs)
+
+
+async def show_checked_by_hand(interaction, query):
+    rows = load_name_ok_log()
+    title, colour = "Records checked by hand", EMBED_COLOUR
+    if query:
+        matches = find_levels(query)
+        if not matches:
+            await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+            return
+        lv = next((x for x in matches if x["id"] == query), matches[0])
+        rows = [v for v in rows if v["id"] == lv["id"]]
+        title, colour = f"Checked by hand — {lv['name']}", list_colour(lv["list"])
+    if not rows:
+        await interaction.response.send_message("No record has been checked by hand yet.")
+        return
+    lines = []
+    for v in reversed(rows):   # newest first
+        who = f"<@{v['user_id']}> ({v['user']}, ID `{v['user_id']}`)" if v["user_id"].isdigit() else v["user"]
+        level = v["level"] if v["level"] not in ("", "-") else f"level {v['id']}"
+        url = f"{LIST_BASE_URL}/{v['list']}?level={v['id']}" if v["list"] not in ("", "-") else None
+        level = f"[{level}](<{url}>)" if url else level
+        what = video_label(v["kind"], "" if v["player"] == "-" else v["player"]) if v["kind"] not in ("", "-") else "Video"
+        link = v["link"] if v["link"] not in ("", "-") else ("https://youtu.be/" + v["key"].split(":", 1)[-1])
+        line = f"{discord_time(v['when'], 'f')} — {who}\n{what} on {level} · [video](<{link}>)"
+        if v["named"] not in ("", "-"):
+            line += f"\nThe title named **{v['named']}**: “{v['title'][:100]}”"
+        lines.append(line)
+    noun = "validation" if len(rows) == 1 else "validations"
+    view = PagedView(title, paginate(lines, 8), interaction.user.id, "/records",
+                     footer=f"{len(rows)} {noun}", colour=colour)
+    await view.send(interaction)
 
 
 async def show_wrong_level(interaction, query):
@@ -1293,6 +1358,7 @@ async def show_wrong_level(interaction, query):
     app_commands.Choice(name="Unavailable videos (private, deleted…)", value="unavailable"),
     app_commands.Choice(name="Duplicate videos (same video for different players, listed twice)", value="duplicates"),
     app_commands.Choice(name="Wrong level (the video title names another level)", value="wrong"),
+    app_commands.Choice(name="Checked by hand (who validated what, and when)", value="checked"),
 ])
 async def cmd_records(interaction: discord.Interaction, query: str = "", show: app_commands.Choice[str] = None):
     if show and show.value == "duplicates":
@@ -1300,6 +1366,9 @@ async def cmd_records(interaction: discord.Interaction, query: str = "", show: a
         return
     if show and show.value == "wrong":
         await show_wrong_level(interaction, query)
+        return
+    if show and show.value == "checked":
+        await show_checked_by_hand(interaction, query)
         return
     videos = load_unavailable_videos()
     if videos is None:

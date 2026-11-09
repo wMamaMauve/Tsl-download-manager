@@ -641,6 +641,12 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
             [ "$n" -gt "$RECORD_ANNOUNCE_MAX" ] && notify_rec "…and $((n - RECORD_ANNOUNCE_MAX)) more records with a title naming another level (\`/records\` lists them all)."
         fi
         mv "$TMP/wrong.tsv" "$WRONG"
+        # traceability of the records validated by hand on Discord (who, Discord ID, when, what)
+        if [ -s "$NAME_OK" ]; then
+            { printf 'level id\tvideo\tvalidated by\twhen\tDiscord ID\tlist\tlevel\tkind\tplayer\tlink\ttitle\ttitle named\n'
+              cat "$NAME_OK"; } > "$FILES/checked_by_hand.tsv"
+            nc_put "checked_by_hand.tsv"
+        fi
         { printf 'list\tid\tlevel\tkind\tplayer\tlink\ttitle\tlevels named in the title\n'; cat "$WRONG"; } > "$FILES/wrong_level_videos.tsv"
         nc_put "wrong_level_videos.tsv"
     fi
