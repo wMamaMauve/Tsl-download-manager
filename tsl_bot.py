@@ -623,7 +623,7 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
         return
 
     view = DiffView(lv, diffs, interaction.user.id)
-    embed, files = view.render()
+    embed, files = await asyncio.to_thread(view.render)
     kwargs = {"embed": embed, "view": view} if len(diffs) > 1 else {"embed": embed}
     kwargs["files"] = files
     if not any(f.filename.endswith(".txt") for f in files):
@@ -827,11 +827,22 @@ class DiffView(discord.ui.View):
     async def show(self, interaction, index):
         self.index = min(max(index, 0), len(self.diffs) - 1)
         self.refresh_buttons()
-        embed, files = self.render()
+        # acknowledge the click right away (Discord allows 3 s), then build the page: reading a big
+        # diff file, drawing the objects picture and uploading the attachments can take longer
+        await interaction.response.defer()
+        embed, files = await asyncio.to_thread(self.render)
         too_big = not any(f.filename.endswith(".txt") for f in files)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=embed, view=self, attachments=files,
             content="_(full list too large for Discord, see Nextcloud)_" if too_big else None)
+
+    async def on_error(self, interaction, error, _item):
+        log.exception("/diff button failed", exc_info=error)
+        send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        try:
+            await send(f"Something went wrong while showing this change: {error}", ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     @discord.ui.button(label="Newest", style=discord.ButtonStyle.secondary)
     async def newest(self, interaction, _button):
