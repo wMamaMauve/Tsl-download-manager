@@ -462,7 +462,7 @@ for id in "${ORDER[@]}"; do
         note "[$lst] MODIFIED: $name ($id) v${ST_VER[$id]} -> v$ver${diff_log:+ — $diff_log}${extra:+ (info: $extra)} (previous version in $hist)"
         notify "[$lst] **Level modified**: $(gdlink "$name" "$id") by $author${extra:+ — info also changed: $extra}"
         while IFS= read -r line; do notify "$line"; done < "$TMP/diff.msg"
-        printf '%s\t%s\t%s\n' "$lst" "$id" "$name" >> "$TMP/modified.tsv"   # for the bot's /status
+        printf '%s\t%s\t%s\n' "$lst" "$id" "$name" >> "$TMP/modified.tsv"   # for the bot's /status and /diff hint
         updated=$((updated + 1)); changed=1
     elif [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then
         what="$(info_diff "${ST_INFO[$id]}" "$info")"
@@ -512,6 +512,11 @@ nc_flush || failed=$((failed + 1))
 summary="$new new, $updated modified, $infos info changed, $deleted deleted, $same unchanged, $failed failed"
 [ "$FIRST_RUN" = 1 ] && [ "$new" -gt 0 ] && notify "First run: $new levels archived to Nextcloud."
 [ "${GD_BLOCKED:-0}" = 1 ] && notify "The GD servers rate-limited the requests: run interrupted, the rest will be done on the next run."
+# how to see the details of a modified level (bot only)
+if [ -n "$DISCORD_BOT_TOKEN" ] && [ -s "$TMP/modified.tsv" ]; then
+    notify ""
+    notify "Use \`/diff $(head -1 "$TMP/modified.tsv" | cut -f3)\` to see what changed in a level."
+fi
 discord_send "$summary"
 printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
 # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)

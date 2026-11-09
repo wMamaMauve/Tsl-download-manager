@@ -185,16 +185,19 @@ log_line="$objs"
 [ -n "$settings" ] && log_line="$log_line; settings: $settings"
 printf 'LOG\t%s\n' "$log_line"
 
-if [ $((n_add + n_rem + n_mov)) -gt 0 ]; then
-    printf 'MSG\t**%s**%s\n' "$objs" "${where:+ — $where}"
-    added_types=$(type_summary A); removed_types=$(type_summary R); moved_types=$(type_summary M)
-    [ -n "$added_types" ] && printf 'MSG\tAdded: %s\n' "$added_types"
-    [ -n "$removed_types" ] && printf 'MSG\tRemoved: %s\n' "$removed_types"
-    [ -n "$moved_types" ] && printf 'MSG\tMoved: %s\n' "$moved_types"
-else
-    printf 'MSG\tNo object added, removed or moved\n'
-fi
-[ -n "$settings" ] && printf 'MSG\tSettings changed: %s\n' "$settings"
+{
+    if [ $((n_add + n_rem + n_mov)) -gt 0 ]; then
+        printf '**%s**%s\n' "$objs" "${where:+ — $where}"
+        added_types=$(type_summary A); removed_types=$(type_summary R); moved_types=$(type_summary M)
+        [ -n "$added_types" ] && printf 'Added: %s\n' "$added_types"
+        [ -n "$removed_types" ] && printf 'Removed: %s\n' "$removed_types"
+        [ -n "$moved_types" ] && printf 'Moved: %s\n' "$moved_types"
+    else
+        printf 'No object added, removed or moved\n'
+    fi
+    [ -n "$settings" ] && printf 'Settings changed: %s\n' "$settings"
+} > "$T/summary"
+sed 's/^/MSG\t/' "$T/summary"
 
 if [ -n "$DETAIL" ]; then
     {
@@ -202,7 +205,8 @@ if [ -n "$DETAIL" ]; then
         echo "  old: ${OLD_LABEL:-$OLD}"
         echo "  new: ${NEW_LABEL:-$NEW}"
         echo
-        echo "$log_line"
+        echo "SUMMARY"
+        cat "$T/summary"
         echo
         echo "Format: object id, x, y (moved: old x, y -> new x, y), then all the object properties."
         echo

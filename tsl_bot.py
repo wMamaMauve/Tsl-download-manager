@@ -351,6 +351,91 @@ async def cmd_level(interaction: discord.Interaction, query: str):
         await interaction.followup.send(lv["video"])
 
 
+def level_diffs(level_id):
+    """Object diff files of a level (history/<name> (<id>)/<date>_vX_to_vY_diff.txt), newest first."""
+    paths = []
+    for hist in (files_dir() / "history", files_dir() / "historique"):
+        if hist.is_dir():
+            paths += [p for d in hist.iterdir() if d.is_dir() and d.name.endswith(f"({level_id})")
+                      for p in d.glob("*_diff.txt")]
+    return sorted(paths, key=lambda p: (p.name[:10], p.stat().st_mtime), reverse=True)
+
+
+def parse_diff(path):
+    """-> (summary lines, {'ADDED': [...], 'REMOVED': [...], 'MOVED': [...]})"""
+    summary, sections, current = [], {}, None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = re.match(r"^(SUMMARY|ADDED|REMOVED|MOVED|SETTINGS)\b", line)
+        if m:
+            current = m.group(1)
+            sections.setdefault(current, [])
+            continue
+        if current == "SUMMARY":
+            if line.strip():
+                summary.append(line.strip())
+            else:
+                current = None
+        elif current and line.startswith("  "):
+            sections[current].append(line.strip())
+        elif current is None and not summary and re.match(r"^\+\d+ / -\d+ objects", line):
+            summary.append(line.strip())   # diff files written before the SUMMARY section existed
+    return summary, sections
+
+
+def short_object(line):
+    """'+ id 1 at x=54077 y=255   [1,1,...]' -> '+ id 1 at x=54077 y=255'"""
+    return re.sub(r"\s+\[.*\]$", "", line)
+
+
+@bot.tree.command(name="diff", description="What changed in a level the last time it was modified")
+@app_commands.describe(query="Name, creator or ID of the level")
+@app_commands.autocomplete(query=level_autocomplete)
+async def cmd_diff(interaction: discord.Interaction, query: str):
+    matches = find_levels(query)
+    if not matches:
+        await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+        return
+    lv = next((x for x in matches if x["id"] == query), matches[0])
+    if len(matches) > 1 and lv["id"] != query and lv["name"].lower() != query.strip().lower():
+        lines = [f"• **{x['name']}** by {x['author']} (`{x['id']}`)" for x in matches[:15]]
+        await interaction.response.send_message(
+            f"{len(matches)} levels match, please be more specific:\n" + "\n".join(lines), ephemeral=True)
+        return
+    diffs = level_diffs(lv["id"])
+    url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
+    if not diffs:
+        await interaction.response.send_message(
+            f"No recorded changes for **[{lv['name']}](<{url}>)** yet: a comparison is made the next time "
+            "the level is modified.", ephemeral=True)
+        return
+
+    latest = diffs[0]
+    summary, sections = parse_diff(latest)
+    embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=0x3498DB,
+                          description="\n".join(summary) or "No details available.")
+    embed.add_field(name="Changed on", value=latest.name[:10], inline=True)
+    embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
+    preview = []
+    for key in ("ADDED", "REMOVED", "MOVED"):
+        preview += [short_object(x) for x in sections.get(key, [])[:4]]
+    if preview:
+        embed.add_field(name="First changed objects", value="```\n" + "\n".join(preview)[:990] + "\n```",
+                        inline=False)
+    if sections.get("SETTINGS"):
+        embed.add_field(name="Settings", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
+                        inline=False)
+    if len(diffs) > 1:
+        older = ", ".join(sorted({p.name[:10] for p in diffs[1:]}, reverse=True)[:10])
+        embed.add_field(name="Earlier changes", value=older, inline=False)
+    embed.set_footer(text="The attached file lists every added, removed and moved object.")
+
+    if latest.stat().st_size <= UPLOAD_MAX:
+        await interaction.response.send_message(embed=embed, file=discord.File(latest, filename=latest.name))
+    else:
+        await interaction.response.send_message(content="_(full list too large for Discord, see Nextcloud)_",
+                                                embed=embed)
+
+
 @bot.tree.command(name="changes", description="What changed in the last days")
 @app_commands.describe(days="Number of days (default: 7)", everything="Also include ranking changes")
 async def cmd_changes(interaction: discord.Interaction, days: app_commands.Range[int, 1, 365] = 7,
