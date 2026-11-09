@@ -3,7 +3,7 @@
 
 - Posts the changes detected by tsl-sync.sh to a channel
   (files dropped in DATA_DIR/notifications/).
-- Slash commands: /level, /changes, /list, /status, /check.
+- Slash commands: /level, /diff, /changes, /list, /status, /run.
 
 Configuration: the same file as tsl-sync (/etc/tsl-sync.conf or TSL_CONF):
     DISCORD_BOT_TOKEN="..."      bot token (Discord Developer Portal)
@@ -702,9 +702,9 @@ async def cmd_status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="check", description="Start a check run now")
+@bot.tree.command(name="run", description="Start a tracking run now: re-download every level and look for changes (~35 min)")
 @app_commands.default_permissions(manage_guild=True)
-async def cmd_check(interaction: discord.Interaction):
+async def cmd_run(interaction: discord.Interaction):
     res = subprocess.run(["systemctl", "start", "--no-block", "tsl-sync"], capture_output=True, text=True,
                          check=False)
     if res.returncode == 0:

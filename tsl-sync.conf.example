@@ -23,7 +23,7 @@ UPLOAD_AT_END=1
 DAILY=1
 
 # --- Discord ------------------------------------------------------------------
-# Bot (recommended): announcements + /level /changes /list /status /check commands
+# Bot (recommended): announcements + /level /diff /changes /list /status /run commands
 #   1. https://discord.com/developers/applications > New Application > Bot > Reset Token
 #   2. OAuth2 > URL Generator: tick "bot" + "applications.commands",
 #      permissions "Send Messages", "Embed Links", "Attach Files" > open the link to invite it
