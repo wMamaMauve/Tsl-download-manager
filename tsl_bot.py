@@ -727,9 +727,6 @@ def diff_embed(lv, path, index, total):
     if preview:
         embed.add_field(name="First changed objects", value="```\n" + "\n".join(preview)[:990] + "\n```",
                         inline=False)
-    if sections.get("SETTINGS"):
-        embed.add_field(name="Settings detail", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
-                        inline=False)
     where = "" if total == 1 else (" (newest)" if index == 0 else (" (oldest)" if index == total - 1 else ""))
     embed.set_footer(text=f"Change {index + 1}/{total}{where} · "
                           "the attached file lists every added, removed and moved object")
