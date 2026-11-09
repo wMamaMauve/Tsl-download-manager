@@ -197,10 +197,22 @@ def presence_text():
     return f"✅ Last run {m.group(1)} {m.group(2)} · {', '.join(parts) if parts else 'no changes'}"
 
 
+def discord_time(text, style="f"):
+    """'2026-11-10 04:21[:07]' or '2026-11-10' (server local time) -> Discord timestamp markup,
+    shown to every user in their own time zone and language. Unparsable text is returned as is.
+    Styles: f = date and time, D = date, R = relative ("2 hours ago")."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return f"<t:{int(dt.datetime.strptime(text.strip(), fmt).timestamp())}:{style}>"
+        except ValueError:
+            pass
+    return text
+
+
 def short_log_line(line):
-    """'2026-11-10 04:21:07 [tsl] MODIFIED: …' -> '`11-10 04:21` [tsl] MODIFIED: …'"""
-    m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d):\d\d (.*)", line)
-    return f"`{m.group(1)} {m.group(2)}` {m.group(3)}" if m else line
+    """'2026-11-10 04:21:07 [tsl] MODIFIED: …' -> '<t:…:f> [tsl] MODIFIED: …'"""
+    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)", line)
+    return f"{discord_time(m.group(1))} {m.group(2)}" if m else line
 
 
 # --------------------------------------------------------------------------- bot
@@ -528,7 +540,7 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
     summary, sections = parse_diff(latest)
     embed = discord.Embed(title=f"Changes in {lv['name']}", url=url, colour=EMBED_COLOUR,
                           description="\n".join(summary) or "No details available.")
-    embed.add_field(name="Changed on", value=latest.name[:10], inline=True)
+    embed.add_field(name="Changed on", value=discord_time(latest.name[:10], "D"), inline=True)
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     preview = []
     for key in ("ADDED", "REMOVED", "MOVED"):
@@ -540,7 +552,7 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
         embed.add_field(name="Settings", value="```\n" + "\n".join(sections["SETTINGS"][:8])[:990] + "\n```",
                         inline=False)
     if len(diffs) > 1:
-        older = ", ".join(sorted({p.name[:10] for p in diffs[1:]}, reverse=True)[:10])
+        older = ", ".join(discord_time(d, "D") for d in sorted({p.name[:10] for p in diffs[1:]}, reverse=True)[:10])
         embed.add_field(name="Earlier changes", value=older, inline=False)
     embed.set_footer(text="The attached file lists every added, removed and moved object.")
 
@@ -669,7 +681,7 @@ async def cmd_status(interaction: discord.Interaction):
     embed = discord.Embed(title="Server & Tracking status", colour=EMBED_COLOUR)
     embed.add_field(name="Current run", value=step or "✅ Idle", inline=False)
     if when:
-        embed.add_field(name="Last run", value=when, inline=False)
+        embed.add_field(name="Last run", value=f"{discord_time(when)} ({discord_time(when, 'R')})", inline=False)
         for key, label in (("new", "New"), ("modified", "Modified"), ("info changed", "Info changed"),
                            ("deleted", "Deleted"), ("unchanged", "Unchanged"), ("failed", "Failed")):
             embed.add_field(name=label, value=str(counts.get(key, 0)), inline=True)
@@ -696,8 +708,6 @@ async def cmd_status(interaction: discord.Interaction):
 
     embed.add_field(name="Tracked levels", inline=False, value="\n".join(
         f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS))
-    embed.add_field(name="Deleted from the GD servers", inline=False,
-                    value=str(sum(1 for s in state.values() if s["status"] == "deleted")))
     await interaction.response.send_message(embed=embed)
 
 
