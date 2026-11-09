@@ -27,6 +27,7 @@ NC_DIR="${NC_DIR:-TSL}"          # dossier de destination dans Nextcloud
 UPLOAD_AT_END="${UPLOAD_AT_END:-1}"  # 1 = tout envoyer à Nextcloud à la fin ; 0 = au fur et à mesure
 DAILY="${DAILY:-1}"              # 1 = un dossier par jour (AAAA-MM-JJ) avec les niveaux nouveaux/modifiés ce jour-là
 RESYNC="${RESYNC:-0}"            # 1 = renvoyer tous les fichiers locaux vers Nextcloud
+GMD_BINARY_VERSION="${GMD_BINARY_VERSION:-47}"  # version du format de sauvegarde du jeu (clé k50, 47 = GD 2.2)
 AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
 
 STATE="$DATA_DIR/state.tsv"      # id  version  sha256  liste  chemin_relatif
@@ -201,6 +202,18 @@ save_state() {
     done | sort -n > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
 
+# ---------------------------------------------------------------- 0. mise à niveau des anciens .gmd
+# Les premières versions du script n'écrivaient pas la clé k50 (version du format) :
+# sans elle, le jeu importe un niveau vide. On l'ajoute sans re-télécharger.
+fixed=0
+while IFS= read -r -d '' f; do
+    if ! grep -q '<k>k50</k>' "$f"; then
+        sed -i "s#<k>k21</k><i>2</i>#<k>k21</k><i>2</i><k>k50</k><i>$GMD_BINARY_VERSION</i>#" "$f"
+        nc_put "${f#"$FILES/"}"; fixed=$((fixed + 1))
+    fi
+done < <(find "$FILES" -name '*.gmd' -print0)
+[ "$fixed" -gt 0 ] && log "Mise à niveau du format de $fixed fichiers .gmd (ajout de k50)"
+
 # ---------------------------------------------------------------- 1. listes
 declare -A WANT_LIST=() WANT_POS=() WANT_NAME=() WANT_AUTHOR=()
 ORDER=()
@@ -256,7 +269,7 @@ fi
 # ---------------------------------------------------------------- 3. téléchargements
 make_gmd() {  # make_gmd <fichier réponse (partie niveau)> <nom> <auteur> <fichier>
     local raw="$1" name="$2" author="$3" out="$4"
-    awk -F: -v NAME="$(xml_escape "$name")" -v AUTHOR="$(xml_escape "$author")" '
+    awk -F: -v BV="$GMD_BINARY_VERSION" -v NAME="$(xml_escape "$name")" -v AUTHOR="$(xml_escape "$author")" '
     { for (j = 1; j < NF; j += 2) f[$j] = $(j + 1) }
     END {
         if (f["4"] == "") exit 1
@@ -264,7 +277,8 @@ make_gmd() {  # make_gmd <fichier réponse (partie niveau)> <nom> <auteur> <fich
         printf "<k>kCEK</k><i>4</i><k>k2</k><s>%s</s>", NAME
         if (f["3"] != "") printf "<k>k3</k><s>%s</s>", f["3"]
         printf "<k>k4</k><s>%s</s><k>k5</k><s>%s</s>", f["4"], AUTHOR
-        printf "<k>k13</k><t /><k>k21</k><i>2</i><k>k16</k><i>%d</i>", (f["5"] == "" ? 1 : f["5"])
+        printf "<k>k13</k><t /><k>k21</k><i>2</i><k>k50</k><i>%d</i><k>k16</k><i>%d</i>", BV, (f["5"] == "" ? 1 : f["5"])
+        if (f["45"] + 0 > 0) printf "<k>k48</k><i>%d</i>", f["45"]
         if (f["12"] + 0 > 0) printf "<k>k8</k><i>%d</i>", f["12"]
         if (f["35"] + 0 > 0) printf "<k>k45</k><i>%d</i>", f["35"]
         printf "</dict></plist>"
