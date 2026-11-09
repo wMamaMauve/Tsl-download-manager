@@ -64,6 +64,11 @@ OWN_PROGRESS=1
 
 # What to do: all (default), levels (levels only), records (videos only).
 # Given as first argument, as RUN_MODE, or left by the Discord bot's /run in next_run_mode.
+# A run started by hand (/run on Discord, or in a terminal) always posts its result on Discord;
+# the automatic run of the night only posts when something changed.
+MANUAL="${RUN_MANUAL:-0}"
+{ [ -f "$DATA_DIR/next_run_mode" ] || [ $# -gt 0 ] || [ -t 0 ]; } && MANUAL=1
+DISCORD_ALWAYS="$MANUAL"
 RUN_MODE="${1:-${RUN_MODE:-}}"
 if [ -z "$RUN_MODE" ] && [ -f "$DATA_DIR/next_run_mode" ]; then
     RUN_MODE="$(head -c 20 "$DATA_DIR/next_run_mode" | tr -dc 'a-z')"
@@ -80,7 +85,7 @@ case "$RUN_MODE" in
     records) progress "Starting a run (record videos only)" ;;
     *)       progress "Starting a run" ;;
 esac
-log "Run mode: $RUN_MODE"
+log "Run mode: $RUN_MODE ($([ "$MANUAL" = 1 ] && echo "started by hand: result always posted" || echo "automatic: posted only if something changed"))"
 
 # ---------------------------------------------------------------- migration from the French version
 # Earlier versions used French file and folder names: rename them once.
@@ -253,7 +258,6 @@ fi
 # ---------------------------------------------------------------- Discord
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"      # Discord webhook URL (empty = disabled)
 DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"  # if set, announcements are posted by the bot (tsl_bot.py)
-DISCORD_ALWAYS="${DISCORD_ALWAYS:-1}"       # 1 = also post a summary when nothing changed (0 = only when something changed)
 notify() { printf '%s\n' "$*" >> "$TMP/discord.txt"; }
 
 json_string() {  # escapes text for JSON (stdin -> stdout, with quotes)

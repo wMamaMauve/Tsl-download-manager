@@ -70,6 +70,8 @@ The bot posts everything that changes to a channel (level modified, info changed
 
 Run it again after a game update. Without these pictures, `/diff` works as before.
 
+**When does the bot post?** The automatic run of the night posts only when something changed (a level modified, deleted, a video gone…). A run started with `/run` (or by hand in a terminal) always posts its result, even "✅ No changes were detected."
+
 Setup: `./install-bot.sh` (installs Python and discord.py), then fill in `DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID` in `/etc/tsl-sync.conf` (the steps are explained in the file) and run `systemctl restart tsl-bot`. Log: `journalctl -u tsl-bot -f`.
 
 ## Change detection
