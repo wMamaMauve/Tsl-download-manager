@@ -18,6 +18,10 @@ Le premier lancement télécharge environ 630 niveaux avec une pause de 2 s entr
 
 **Mot de passe Nextcloud** : utilise un *mot de passe d'application* (Nextcloud → Paramètres → Sécurité → « Créer un mot de passe d'application »), pas ton vrai mot de passe. Le fichier `/etc/tsl-sync.conf` n'est lisible que par root.
 
+## Stockage local puis envoi groupé
+
+Les fichiers sont d'abord enregistrés sur le serveur dans `/var/lib/tsl-sync/fichiers/`, puis **tout est envoyé dans Nextcloud en une fois à la fin du passage**. Si Nextcloud est injoignable, les fichiers restent dans la file d'attente (`/var/lib/tsl-sync/a_envoyer.tsv`) et repartent au passage suivant. Pour envoyer au fur et à mesure à la place, mets `UPLOAD_AT_END=0` dans la config.
+
 ## Ce que tu obtiens dans Nextcloud
 
 ```
@@ -60,6 +64,7 @@ Exemple de journal :
 |---|---|
 | Lancer un passage maintenant | `/opt/tsl-sync/tsl-sync.sh` |
 | Tout re-télécharger pour comparer | `FORCE=1 /opt/tsl-sync/tsl-sync.sh` |
+| Renvoyer **tous** les fichiers locaux vers Nextcloud | `RESYNC=1 /opt/tsl-sync/tsl-sync.sh` |
 | Voir le journal (systemd) | `journalctl -u tsl-sync` |
 | Prochain passage prévu | `systemctl list-timers tsl-sync.timer` |
 | Mettre à jour le script | `git pull && ./install.sh` |

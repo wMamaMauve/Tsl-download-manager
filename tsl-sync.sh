@@ -24,6 +24,8 @@ NC_URL="${NC_URL:-}"             # ex : https://cloud.exemple.fr  (vide = pas d'
 NC_USER="${NC_USER:-}"
 NC_PASS="${NC_PASS:-}"           # mot de passe d'application Nextcloud
 NC_DIR="${NC_DIR:-TSL}"          # dossier de destination dans Nextcloud
+UPLOAD_AT_END="${UPLOAD_AT_END:-1}"  # 1 = tout envoyer à Nextcloud à la fin ; 0 = au fur et à mesure
+RESYNC="${RESYNC:-0}"            # 1 = renvoyer tous les fichiers locaux vers Nextcloud
 AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
 
 STATE="$DATA_DIR/state.tsv"      # id  version  sha256  liste  chemin_relatif
@@ -101,8 +103,7 @@ nc_mkdirs() {  # crée récursivement le dossier distant <rel>
     done
 }
 
-nc_put() {  # nc_put <chemin relatif dans FILES>
-    nc_enabled || return 0
+nc_put_now() {  # envoie <chemin relatif dans FILES>
     local rel="$1" dir code
     dir="$(dirname "$rel")"; [ "$dir" = "." ] && dir=""
     nc_mkdirs "$dir" || return 1
@@ -110,9 +111,50 @@ nc_put() {  # nc_put <chemin relatif dans FILES>
     case "$code" in 200|201|204) return 0 ;; *) log "  Nextcloud : échec de l'envoi de $rel (HTTP $code)"; return 1 ;; esac
 }
 
+nc_delete_now() {
+    local code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X DELETE "$(nc_dav "$1")")" || code=000
+    case "$code" in 200|204|404) return 0 ;; *) log "  Nextcloud : échec de la suppression de $1 (HTTP $code)"; return 1 ;; esac
+}
+
+# Les envois sont mis en file d'attente ($QUEUE) et faits en une fois à la fin
+# (UPLOAD_AT_END=1, par défaut). Ce qui échoue reste dans la file pour le passage suivant.
+QUEUE="$DATA_DIR/a_envoyer.tsv"
+nc_put() {
+    nc_enabled || return 0
+    if [ "$UPLOAD_AT_END" = 1 ]; then printf 'PUT\t%s\n' "$1" >> "$QUEUE"; else nc_put_now "$1"; fi
+}
 nc_delete() {
     nc_enabled || return 0
-    curl -sS -o /dev/null -u "$NC_USER:$NC_PASS" -X DELETE "$(nc_dav "$1")" || true
+    if [ "$UPLOAD_AT_END" = 1 ]; then printf 'DEL\t%s\n' "$1" >> "$QUEUE"; else nc_delete_now "$1" || true; fi
+}
+
+nc_flush() {  # traite la file d'attente
+    nc_enabled || return 0
+    [ -s "$QUEUE" ] || return 0
+    local op rel total cnt=0 ok=0 ko=0
+    # garde seulement la dernière opération par fichier, dans l'ordre
+    awk -F'\t' '{ last[$2] = NR; line[NR] = $0 } END { for (i = 1; i <= NR; i++) { split(line[i], a, "\t"); if (last[a[2]] == i) print line[i] } }' \
+        "$QUEUE" > "$TMP/queue"
+    total="$(wc -l < "$TMP/queue")"
+    log "Envoi vers Nextcloud ($total fichiers)"
+    : > "$TMP/queue.fail"
+    while IFS=$'\t' read -r op rel; do
+        cnt=$((cnt + 1)); [ $((cnt % 50)) -eq 0 ] && log "  $cnt / $total"
+        if [ "$op" = DEL ]; then nc_delete_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
+        elif [ -f "$FILES/$rel" ]; then nc_put_now "$rel" && ok=$((ok + 1)) || { ko=$((ko + 1)); printf '%s\t%s\n' "$op" "$rel" >> "$TMP/queue.fail"; }
+        fi
+    done < "$TMP/queue"
+    mv "$TMP/queue.fail" "$QUEUE"
+    log "Nextcloud : $ok envoyés, $ko en échec$([ "$ko" -gt 0 ] && echo " (réessayés au prochain passage)")"
+    [ "$ko" -eq 0 ]
+}
+
+nc_resync() {  # met en file tous les fichiers locaux (RESYNC=1)
+    nc_enabled || return 0
+    (cd "$FILES" && find . -type f ! -name '.*' | sed 's#^\./##' | sort) | while IFS= read -r rel; do
+        printf 'PUT\t%s\n' "$rel"
+    done >> "$QUEUE"
 }
 
 # ---------------------------------------------------------------- état
@@ -261,6 +303,8 @@ for lst in $LISTS; do
     nc_put "$lst/index.tsv"
 done
 cp "$LOG" "$FILES/changements.log" && nc_put "changements.log"
+[ "$RESYNC" = 1 ] && nc_resync
+nc_flush || failed=$((failed + 1))
 
 log "Terminé : $new nouveaux, $updated modifiés, $same inchangés, $failed en échec"
 [ "$failed" -eq 0 ]

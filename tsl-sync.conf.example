@@ -17,3 +17,5 @@ LISTS="tsl tslplus"
 DATA_DIR="/var/lib/tsl-sync"
 # Pause entre deux requêtes aux serveurs Geometry Dash (secondes) — évite le blocage
 DELAY=2
+# 1 = tout envoyer dans Nextcloud à la fin du passage (par défaut) ; 0 = au fur et à mesure
+UPLOAD_AT_END=1
