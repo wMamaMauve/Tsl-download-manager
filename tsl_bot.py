@@ -328,21 +328,81 @@ async def cmd_changes(interaction: discord.Interaction, days: app_commands.Range
         await interaction.followup.send("… list truncated, use a smaller number of days.")
 
 
+PAGE_SIZE = 25
+
+
+class ListView(discord.ui.View):
+    """One page of a list, with buttons to change page (only for the user who asked)."""
+
+    def __init__(self, list_id, list_name, page, owner_id):
+        super().__init__(timeout=300)
+        self.list_id, self.list_name, self.owner_id = list_id, list_name, owner_id
+        self.levels = sorted((lv for lv in load_index() if lv["list"] == list_id), key=lambda x: x["position"])
+        self.pages = max(1, (len(self.levels) + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page = min(max(page, 1), self.pages)
+        self.message = None
+        self.refresh_buttons()
+
+    def embed(self):
+        chunk = self.levels[(self.page - 1) * PAGE_SIZE: self.page * PAGE_SIZE]
+        lines = [f"`#{lv['position']:>3}` [{lv['name']}]({LIST_BASE_URL}/{lv['list']}?level={lv['id']}) "
+                 f"— {lv['author']}" for lv in chunk]
+        embed = discord.Embed(title=self.list_name, url=f"{LIST_BASE_URL}/{self.list_id}",
+                              description="\n".join(lines) or "This list is empty.", colour=0x3498DB)
+        embed.set_footer(text=f"Page {self.page}/{self.pages} · {len(self.levels)} levels")
+        return embed
+
+    def refresh_buttons(self):
+        self.first.disabled = self.previous.disabled = self.page <= 1
+        self.next.disabled = self.last.disabled = self.page >= self.pages
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message("These buttons belong to whoever used /list — "
+                                                "run /list yourself to browse.", ephemeral=True)
+        return False
+
+    async def show(self, interaction, page):
+        self.page = min(max(page, 1), self.pages)
+        self.refresh_buttons()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="First", style=discord.ButtonStyle.secondary)
+    async def first(self, interaction, _button):
+        await self.show(interaction, 1)
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.primary)
+    async def previous(self, interaction, _button):
+        await self.show(interaction, self.page - 1)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+    async def next(self, interaction, _button):
+        await self.show(interaction, self.page + 1)
+
+    @discord.ui.button(label="Last", style=discord.ButtonStyle.secondary)
+    async def last(self, interaction, _button):
+        await self.show(interaction, self.pages)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 @bot.tree.command(name="list", description="Show the ranking")
-@app_commands.describe(name="Which list", page="Page (25 levels per page)")
+@app_commands.describe(name="Which list", page="Page to start on (25 levels per page)")
 @app_commands.choices(name=[app_commands.Choice(name=LIST_NAMES.get(x, x), value=x) for x in LISTS])
 async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[str],
                    page: app_commands.Range[int, 1, 100] = 1):
-    levels = sorted((lv for lv in load_index() if lv["list"] == name.value), key=lambda x: x["position"])
-    chunk = levels[(page - 1) * 25: page * 25]
-    if not chunk:
-        await interaction.response.send_message("Empty page.", ephemeral=True)
-        return
-    pages = (len(levels) + 24) // 25
-    lines = [f"`#{lv['position']:>3}` **{lv['name']}** — {lv['author']}" for lv in chunk]
-    await interaction.response.send_message(
-        f"**{name.name}** — page {page}/{pages}\n" + "\n".join(lines),
-        allowed_mentions=discord.AllowedMentions.none())
+    view = ListView(name.value, name.name, page, interaction.user.id)
+    await interaction.response.send_message(embed=view.embed(), view=view,
+                                            allowed_mentions=discord.AllowedMentions.none())
+    view.message = await interaction.original_response()
 
 
 @bot.tree.command(name="status", description="Result of the last tsl-sync run")

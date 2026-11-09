@@ -55,7 +55,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 |---|---|
 | `/level <name or id>` | level info, latest changes, link to the level on the list site, its verification video **and the .gmd file as an attachment** |
 | `/changes [days]` | what changed in the last days |
-| `/list <tsl\|tslplus> [page]` | the ranking |
+| `/list <tsl\|tslplus> [page]` | the ranking, 25 levels per page, with First / Previous / Next / Last buttons |
 | `/status` | result of the last run |
 | `/check` | (admins) start a run now |
 
