@@ -459,7 +459,7 @@ for id in "${ORDER[@]}"; do
             nc_put "$diffrel"
         fi
         note "[$lst] MODIFIED: $name ($id) v${ST_VER[$id]} -> v$ver${diff_log:+ — $diff_log}${extra:+ (info: $extra)} (previous version in $hist)"
-        notify "[$lst] **Level modified**: $(gdlink "$name" "$id") by $author (v${ST_VER[$id]} → v$ver)${extra:+ — info also changed: $extra}"
+        notify "[$lst] **Level modified**: $(gdlink "$name" "$id") by $author${extra:+ — info also changed: $extra}"
         while IFS= read -r line; do notify "$line"; done < "$TMP/diff.msg"
         updated=$((updated + 1)); changed=1
     elif [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then

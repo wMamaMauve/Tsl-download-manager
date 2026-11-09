@@ -76,7 +76,7 @@ On every run, the script:
 Example of a Discord announcement:
 
 ```
-[tsl] Level modified: Shitty NETWORK by Whitar (v9 → v10)
+[tsl] Level modified: Shitty NETWORK by Whitar
 - +124 / -38 objects, 5 moved (34,931 -> 35,017) — mostly between 62% and 71% of the level
 - Added: 80 blocks, 30 spike/hazards, 14 move triggers
 - Removed: 38 blocks
