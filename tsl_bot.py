@@ -17,7 +17,10 @@ import logging
 import os
 import re
 import shlex
+import json
 import subprocess
+import time
+import urllib.request
 from pathlib import Path
 
 import discord
@@ -331,24 +334,68 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="ID", value=lv["id"], inline=True)
     embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
                     inline=True)
+    if not lv["video"]:   # index written before videos were recorded: ask the list site
+        await interaction.response.defer(thinking=True)   # the site may take a few seconds
+        lv["video"] = await asyncio.to_thread(video_from_site, lv["list"], lv["id"])
+    yt = youtube_id(lv["video"])
     if lv["video"]:
         embed.add_field(name="Verification", value=f"[Watch the verification video]({lv['video']})", inline=False)
+    if yt:   # the video's thumbnail, inside the embed (bots cannot put a video player in an embed)
+        embed.set_image(url=f"https://i.ytimg.com/vi/{yt}/hqdefault.jpg")
     else:
         embed.set_thumbnail(url=f"https://levelthumbs.prevter.me/thumbnail/{lv['id']}")
     if history:
         embed.add_field(name="Latest changes", value="\n".join(history)[:1024], inline=False)
 
+    send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
     path = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
     if path and path.is_file() and path.stat().st_size <= UPLOAD_MAX:
-        await interaction.response.send_message(embed=embed, file=discord.File(path, filename=path.name))
+        await send(embed=embed, file=discord.File(path, filename=path.name))
     else:
         note = "_(.gmd file too large for Discord, see Nextcloud)_" if path and path.is_file() else None
-        await interaction.response.send_message(content=note, embed=embed)
+        await send(content=note, embed=embed)
     # The video is sent as a separate message containing only its URL: Discord always
     # shows the YouTube player for such a message (it may not when the URL sits next to
     # a bot embed).
     if lv["video"]:
         await interaction.followup.send(lv["video"])
+
+
+def youtube_id(url):
+    m = re.search(r"(?:v=|youtu\.be/|/shorts/|/embed/|/live/)([A-Za-z0-9_-]{11})", url or "")
+    return m.group(1) if m else None
+
+
+_SITE_CACHE = {}   # list -> (time, {level id: video url})
+
+
+def video_from_site(lst, level_id):
+    """Verification video of a level, read from the list site (cached 1 hour). '' if unknown."""
+    cached = _SITE_CACHE.get(lst)
+    if not cached or time.time() - cached[0] > 3600:
+        videos = {}
+        try:
+            req = urllib.request.Request(f"{LIST_BASE_URL}/{lst}", headers={"User-Agent": "tsl-bot"})
+            html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+            m = re.search(r'<script[^>]*id="__NUXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+            data = json.loads(m.group(1)) if m else []
+            # Nuxt payload: objects reference their values by index in the top-level array
+            for obj in data:
+                if isinstance(obj, dict) and "verification" in obj and "id" in obj:
+                    lid, url = data[obj["id"]], data[obj["verification"]]
+                    if isinstance(url, str):
+                        url = url.strip()
+                        if url.startswith("ttp"):
+                            url = "h" + url
+                        if re.match(r"^(www\.)?(youtube\.com|youtu\.be)/", url):
+                            url = "https://" + url
+                        videos[str(lid)] = url.replace("://www.youtu.be/", "://youtu.be/")
+        except Exception:
+            log.exception("could not read the videos from %s/%s", LIST_BASE_URL, lst)
+        _SITE_CACHE[lst] = (time.time(), videos)
+        cached = _SITE_CACHE[lst]
+    url = cached[1].get(str(level_id), "")
+    return url if url.startswith("http") else ""
 
 
 def level_diffs(level_id):
