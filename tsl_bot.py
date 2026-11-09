@@ -149,7 +149,7 @@ def find_levels(query):
 
 # log keywords (English, plus the French ones written by older versions)
 IMPORTANT = ("MODIFIED", "INFO CHANGED", "DELETED", "REAPPEARED", "ENTERED", "LEFT",
-             "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN",
+             "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN", "DUPLICATE VIDEO",
              "MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE")
 
 
@@ -1030,15 +1030,81 @@ async def cmd_status(interaction: discord.Interaction):
         embed.add_field(name="Unavailable videos", inline=False,
                         value=(f"{len(videos)} verification / showcase / record videos — see `/records`"
                                if videos else "None: every video can be watched"))
+    duplicates = load_duplicate_videos()
+    if duplicates is not None:
+        embed.add_field(name="Duplicate videos", inline=False,
+                        value=(f"{len(duplicates)} videos used for different players or listed twice — "
+                               "see `/records` › Duplicate videos" if duplicates else "None"))
     embed.add_field(name="Tracked levels", inline=False, value="\n".join(
         f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS))
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="records", description="Verification, showcase and record videos that can no longer be watched")
-@app_commands.describe(query="Only this level (name, creator or ID)")
+def load_duplicate_videos():
+    """{video key: {'reason', 'link', 'entries': [dicts]}} from the last check; None if never checked."""
+    path = DATA_DIR / "records_duplicates.tsv"
+    if not path.exists():
+        return None
+    groups = {}
+    keys = ("key", "reason", "list", "id", "name", "kind", "player", "link")
+    for row in read_tsv(path):
+        if len(row) < 8:
+            continue
+        e = dict(zip(keys, row))
+        g = groups.setdefault(e["key"], {"reason": e["reason"], "link": e["link"], "entries": []})
+        g["entries"].append(e)
+    return groups
+
+
+async def show_duplicates(interaction, query):
+    groups = load_duplicate_videos()
+    if groups is None:
+        await interaction.response.send_message("The videos have not been checked yet: they are checked "
+                                                "during the next run.", ephemeral=True)
+        return
+    title, colour, level_id = "Duplicate videos", EMBED_COLOUR, None
+    if query:
+        matches = find_levels(query)
+        if not matches:
+            await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+            return
+        lv = next((x for x in matches if x["id"] == query), matches[0])
+        level_id = lv["id"]
+        groups = {k: g for k, g in groups.items() if any(e["id"] == level_id for e in g["entries"])}
+        title, colour = f"Duplicate videos — {lv['name']}", list_colour(lv["list"])
+        if not groups:
+            await interaction.response.send_message(f"✅ No duplicate video on **{lv['name']}**.")
+            return
+    elif not groups:
+        await interaction.response.send_message("✅ No video is given for different players or listed twice.")
+        return
+    order = {lv["id"]: (LISTS.index(lv["list"]) if lv["list"] in LISTS else 9, lv["position"])
+             for lv in load_index()}
+    lines = []
+    for g in sorted(groups.values(), key=lambda g: min(order.get(e["id"], (9, 0)) for e in g["entries"])):
+        what = "Listed twice" if g["reason"] == "twice" else "Same video for different players"
+        block = [f"**{what}** · [video](<{g['link']}>)"]
+        for e in g["entries"]:
+            block.append(f"• {video_label(e['kind'], e['player'])} — "
+                         f"[{e['name']}](<{LIST_BASE_URL}/{e['list']}?level={e['id']}>)")
+        lines.append("\n".join(block))   # one group = one "line": never split across two pages
+    noun = "video" if len(groups) == 1 else "videos"
+    view = PagedView(title, paginate(lines, 7), interaction.user.id, "/records",
+                     footer=f"{len(groups)} {noun} used more than once", colour=colour)
+    await view.send(interaction)
+
+
+@bot.tree.command(name="records", description="Record videos that can no longer be watched, or that are used twice")
+@app_commands.describe(query="Only this level (name, creator or ID)", show="What to list (default: unavailable videos)")
 @app_commands.autocomplete(query=level_autocomplete)
-async def cmd_records(interaction: discord.Interaction, query: str = ""):
+@app_commands.choices(show=[
+    app_commands.Choice(name="Unavailable videos (private, deleted…)", value="unavailable"),
+    app_commands.Choice(name="Duplicate videos (same video for different players, listed twice)", value="duplicates"),
+])
+async def cmd_records(interaction: discord.Interaction, query: str = "", show: app_commands.Choice[str] = None):
+    if show and show.value == "duplicates":
+        await show_duplicates(interaction, query)
+        return
     videos = load_unavailable_videos()
     if videos is None:
         await interaction.response.send_message("The videos have not been checked yet: they are checked "

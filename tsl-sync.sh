@@ -31,6 +31,7 @@ AWK_PARSER="${AWK_PARSER:-$SCRIPT_DIR/nuxt_levels.awk}"
 DIFF_TOOL="${DIFF_TOOL:-$SCRIPT_DIR/level_diff.sh}"   # object-level comparison of two versions
 RECORD_CHECK="${RECORD_CHECK:-1}"   # 1 = check that the verification / showcase / record videos still work
 RECORD_TOOL="${RECORD_TOOL:-$SCRIPT_DIR/record_check.sh}"
+DUPLICATES_AWK="${DUPLICATES_AWK:-$SCRIPT_DIR/video_duplicates.awk}"
 RECORD_ANNOUNCE_MAX="${RECORD_ANNOUNCE_MAX:-10}"   # videos listed one by one on Discord (then a count)
 
 STATE="$DATA_DIR/state.tsv"
@@ -578,6 +579,41 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
         VIDEOS_CHECKED=1
         notify_rec "The video check failed; it will be retried on the next run."
     fi
+
+    # the same video given for different players, or the same record listed twice
+    DUPS="$DATA_DIR/records_duplicates.tsv"
+    if [ -f "$DUPLICATES_AWK" ] && awk -f "$DUPLICATES_AWK" "$TMP/videos.tsv" | sort > "$TMP/dups.tsv"; then
+        VIDEOS_CHECKED=1
+        dup_count=$(cut -f1 "$TMP/dups.tsv" | sort -u | wc -l)
+        log "  $dup_count videos used more than once"
+        if [ ! -f "$DUPS" ]; then
+            note "VIDEOS: first check, $dup_count videos are used more than once"
+            [ "$dup_count" -gt 0 ] && notify_rec "First check of duplicate videos: **$dup_count** videos are given for different players or listed twice. Use \`/records\` with \`show: Duplicate videos\` to see them."
+        else
+            # new duplicates: reason <TAB> link <TAB> list <TAB> "record of X on [Level](url), …" <TAB> plain text
+            awk -F'\t' -v base="${LIST_BASE_URL%/}" '
+                function label(kind, p) { return (kind == "verification" ? "verification" : "record") (p == "" ? "" : (kind == "verification" ? " by " : " of ") p) }
+                FILENAME == ARGV[1] { old[$1] = 1; next }
+                !($1 in old) {
+                    if (!($1 in seen)) { order[++m] = $1; seen[$1] = 1; why[$1] = $2; link[$1] = $8; lst[$1] = $3 }
+                    md[$1] = md[$1] (md[$1] == "" ? "" : ", ") label($6, $7) " on [" $5 "](<" base "/" $3 "?level=" $4 ">)"
+                    tx[$1] = tx[$1] (tx[$1] == "" ? "" : ", ") label($6, $7) " on " $5 " (" $4 ")"
+                }
+                END { for (i = 1; i <= m; i++) { k = order[i]; print why[k] "\t" link[k] "\t" lst[k] "\t" md[k] "\t" tx[k] } }
+            ' "$DUPS" "$TMP/dups.tsv" > "$TMP/dups.new"
+            n=0
+            while IFS=$'\t' read -r why vlink vlst md tx; do
+                n=$((n + 1))
+                what="Same video for different players"; [ "$why" = twice ] && what="Listed twice"
+                note "[$vlst] DUPLICATE VIDEO ($what): $tx $vlink"
+                [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify_rec "[$vlst] **$what**: $md · [video](<$vlink>)"
+            done < "$TMP/dups.new"
+            [ "$n" -gt "$RECORD_ANNOUNCE_MAX" ] && notify_rec "…and $((n - RECORD_ANNOUNCE_MAX)) more duplicate videos (\`/records\` lists them all)."
+        fi
+        mv "$TMP/dups.tsv" "$DUPS"
+        { printf 'video\treason\tlist\tid\tlevel\tkind\tplayer\tlink\n'; cat "$DUPS"; } > "$FILES/duplicate_videos.tsv"
+        nc_put "duplicate_videos.tsv"
+    fi
 fi
 
 # ---------------------------------------------------------------- 3. index + log
@@ -612,7 +648,7 @@ fi
 # one announcement for the levels, one for the record videos
 [ "$RUN_MODE" = records ] || discord_send "TSL Levels Tracking result" "$TMP/discord.txt" "$summary" 1
 [ "${VIDEOS_CHECKED:-0}" = 1 ] && discord_send "TSL Records Tracking result" "$TMP/discord_records.txt" \
-    "${total_videos:-0} videos on the site · ${unav:-0} unavailable${unav_detail:+ ($unav_detail)}" 2
+    "${total_videos:-0} videos on the site · ${unav:-0} unavailable${unav_detail:+ ($unav_detail)} · ${dup_count:-0} used more than once" 2
 if [ "$RUN_MODE" != records ]; then   # videos only: /status keeps showing the numbers of the last level run
     printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
     # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)

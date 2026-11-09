@@ -10,6 +10,7 @@ install -m 755 "$SRC/tsl-sync.sh" /opt/tsl-sync/tsl-sync.sh
 install -m 644 "$SRC/nuxt_levels.awk" /opt/tsl-sync/nuxt_levels.awk
 install -m 755 "$SRC/level_diff.sh" /opt/tsl-sync/level_diff.sh
 install -m 755 "$SRC/record_check.sh" /opt/tsl-sync/record_check.sh
+install -m 644 "$SRC/video_duplicates.awk" /opt/tsl-sync/video_duplicates.awk
 install -m 644 "$SRC/object_names.tsv" /opt/tsl-sync/object_names.tsv
 install -m 644 "$SRC/object_frames.tsv" /opt/tsl-sync/object_frames.tsv
 install -m 755 "$SRC/extract_sprites.py" /opt/tsl-sync/extract_sprites.py

@@ -58,7 +58,7 @@ The bot posts everything that changes to a channel (level modified, info changed
 | `/changes [days]` | what changed in the last days |
 | `/list <tsl\|tslplus> [page]` | the ranking, 25 levels per page, with First / Previous / Next / Last buttons |
 | `/status` | result of the last run |
-| `/records [level]` | verification, showcase and record videos that can no longer be watched (private, deleted…), with a link and since when |
+| `/records [level] [show]` | verification, showcase and record videos that can no longer be watched (private, deleted…), with a link and since when; with `show: Duplicate videos`, the videos given for different players or listed twice |
 | `/run [what]` | (admins) start a run now: **levels and record videos** (default), **levels only** (re-downloads every level, ~35 min) or **record videos only** (checks every video again, ~20 min) |
 
 ### Pictures of the changed objects in `/diff`
@@ -117,6 +117,8 @@ Every night, the script also checks that the videos of each level can still be w
 - a link that is not a link at all is reported as **invalid link**.
 
 When a video becomes unavailable (or available again), it is written to `changes.log` and announced on Discord (the first 10, then a count). `/records` lists every unavailable video, and `unavailable_videos.tsv` in Nextcloud holds the same list. The first check takes about 20 minutes and only posts a count; after that, a working video is checked again every 3 days (`RECORD_CHECK_DAYS`) and unavailable ones every night. A video that could not be checked (timeout, YouTube rate limit) keeps its previous status. To disable the check: `RECORD_CHECK=0`.
+
+**Duplicate videos**: the same video given for **different players** (one of the two records has the wrong link), or the same record **listed twice** on a level, is reported too (new ones on Discord, all of them in `/records` › Duplicate videos and in `duplicate_videos.tsv`). The same YouTube video written in different ways (`youtu.be/…`, `watch?v=…`, `?si=…`) counts as one. A player's compilation video used for several levels is normal and is not reported.
 
 ## Useful commands
 
