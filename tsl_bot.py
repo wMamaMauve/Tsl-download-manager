@@ -149,7 +149,7 @@ def find_levels(query):
 
 # log keywords (English, plus the French ones written by older versions)
 IMPORTANT = ("MODIFIED", "INFO CHANGED", "DELETED", "REAPPEARED", "ENTERED", "LEFT",
-             "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN", "DUPLICATE VIDEO",
+             "VIDEO UNAVAILABLE", "VIDEO AVAILABLE AGAIN", "DUPLICATE VIDEO", "WRONG LEVEL?",
              "MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE")
 
 
@@ -323,7 +323,7 @@ class TSLBot(discord.Client):
             await self.tree.sync(guild=guild)
         else:
             await self.tree.sync()
-        self.add_dynamic_items(CopyIdButton)   # buttons keep working after a restart
+        self.add_dynamic_items(CopyIdButton, ValidateNameButton)   # buttons keep working after a restart
         self.loop.create_task(self.notification_loop())
 
     async def on_ready(self):
@@ -1035,6 +1035,11 @@ async def cmd_status(interaction: discord.Interaction):
         embed.add_field(name="Duplicate videos", inline=False,
                         value=(f"{len(duplicates)} videos used for different players or listed twice — "
                                "see `/records` › Duplicate videos" if duplicates else "None"))
+    wrong = load_wrong_level()
+    if wrong is not None:
+        embed.add_field(name="Possibly on the wrong level", inline=False,
+                        value=(f"{len(wrong)} records whose video title names another level — "
+                               "see `/records` › Wrong level" if wrong else "None"))
     embed.add_field(name="Tracked levels", inline=False, value="\n".join(
         f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS))
     await interaction.response.send_message(embed=embed)
@@ -1118,46 +1123,167 @@ def latest_video_log():
     return [dict(zip(header, row)) for row in rows[1:] if len(row) >= len(header)], logs[-1].stem
 
 
-@bot.tree.command(name="video", description="Find which levels and players use a video (paste its link)")
-@app_commands.describe(link="Link of the video (YouTube, Medal, Drive…) or a YouTube video ID")
-async def cmd_video(interaction: discord.Interaction, link: str):
+WRONG_FILE = "records_wrong_level.tsv"
+NAME_OK_FILE = "records_name_ok.tsv"
+
+
+def load_name_ok():
+    """{(level id, video key)} validated by hand: never reported as on the wrong level."""
+    return {(row[0], row[1]) for row in read_tsv(DATA_DIR / NAME_OK_FILE) if len(row) >= 2}
+
+
+def load_wrong_level():
+    """Records whose video title names another level (minus the validated ones); None if never checked."""
+    path = DATA_DIR / WRONG_FILE
+    if not path.exists():
+        return None
+    ok = load_name_ok()
+    keys = ("list", "id", "name", "kind", "player", "link", "title", "named")
+    rows = [dict(zip(keys, row)) for row in read_tsv(path) if len(row) >= 8]
+    return [r for r in rows if (r["id"], video_key(r["link"])) not in ok]
+
+
+class ValidateNameButton(discord.ui.DynamicItem[discord.ui.Button],
+                         template=r"tsl:nameok:(?P<level_id>[0-9]+):(?P<yt>[A-Za-z0-9_-]{11})"):
+    """'Validate' button under /video: the record is on the right level even though the video title
+    names another one. It is then never reported again (records_name_ok.tsv). Server managers only."""
+
+    def __init__(self, level_id: str, yt: str, label: str = "Validate"):
+        super().__init__(discord.ui.Button(label=label[:80], style=discord.ButtonStyle.success,
+                                           custom_id=f"tsl:nameok:{level_id}:{yt}"))
+        self.level_id, self.yt = level_id, yt
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["level_id"], match["yt"], item.label or "Validate")
+
+    async def callback(self, interaction):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if perms is not None and not perms.manage_guild:
+            await interaction.response.send_message("Only server managers can validate a record.", ephemeral=True)
+            return
+        key = f"youtube:{self.yt}"
+        if (self.level_id, key) not in load_name_ok():
+            with open(DATA_DIR / NAME_OK_FILE, "a", encoding="utf-8") as f:
+                f.write(f"{self.level_id}\t{key}\t{interaction.user}\t{dt.date.today().isoformat()}\n")
+        # take it out of the current list right away (the next run would do it anyway)
+        path = DATA_DIR / WRONG_FILE
+        rows = read_tsv(path)
+        kept = [row for row in rows if not (len(row) >= 6 and row[1] == self.level_id and video_key(row[5]) == key)]
+        if len(kept) != len(rows):
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("".join("\t".join(row) + "\n" for row in kept), encoding="utf-8")
+            tmp.replace(path)
+        log.info("%s validated the level of video %s on level %s", interaction.user, key, self.level_id)
+        rendered = video_message(key)
+        if rendered:
+            embed, view = rendered
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.response.send_message("Validated.", ephemeral=True)
+
+
+def video_message(key):
+    """(embed, view) describing every use of the video `key` on the list site, or None if unused."""
     found = latest_video_log()
     if found is None:
-        await interaction.response.send_message("The videos have not been checked yet: they are listed after "
-                                                "the next run.", ephemeral=True)
-        return
+        return None
     rows, when = found
-    key = video_key(link)
     matches = [r for r in rows if video_key(r["link"]) == key]
     if not matches:
-        await interaction.response.send_message(f"This video is not used on the list site: <{link.strip()}>")
-        return
+        return None
+    wrong = {(w["id"], video_key(w["link"])): w for w in (load_wrong_level() or [])}
+    ok = load_name_ok()
     positions = {(lv["list"], lv["id"]): lv["position"] for lv in load_index()}
     first = matches[0]
+    title = first.get("title", "-")
+    desc = f"<{first['link']}>"
+    if title and title != "-":
+        desc += f"\n**Title:** {title}"
+    desc += f"\nUsed **{len(matches)}** time{'s' if len(matches) > 1 else ''} on the list site."
     embed = discord.Embed(title="Video search", url=first["link"] if first["link"].startswith("http") else None,
-                          colour=list_colour(first["list"]),
-                          description=f"<{first['link']}>\nUsed **{len(matches)}** time{'s' if len(matches) > 1 else ''} "
-                                      "on the list site.")
+                          colour=list_colour(first["list"]), description=desc[:4000])
     result = first.get("result", "?")
-    checked = first.get("checked", "-")
+    checked = first.get("checked", "-").replace(" (still valid)", "")
     embed.add_field(name="Status", value=f"{result[:1].upper()}{result[1:]}"
                                          + (f" (checked {checked})" if checked not in ("-", "") else ""), inline=False)
     duplicate = next((r["duplicate"] for r in matches if r.get("duplicate", "-") != "-"), None)
     if duplicate:
         embed.add_field(name="Duplicate", value=f"⚠️ {duplicate[:1].upper()}{duplicate[1:]}", inline=False)
+    view = discord.ui.View(timeout=None)
+    yt = key[len("youtube:"):] if key.startswith("youtube:") else None
     for r in matches[:20]:
         pos = positions.get((r["list"], r["level id"]))
         where = f"{LIST_NAMES.get(r['list'], r['list'])}{f' #{pos}' if pos else ''}"
         player = "" if r["player"] == "-" else r["player"]
-        embed.add_field(name=video_label(r["video"], player)[:256], inline=False,
-                        value=f"[{r['level']}]({LIST_BASE_URL}/{r['list']}?level={r['level id']}) by {r['creator']}"
-                              f" · {where}"[:1024])
+        value = f"[{r['level']}]({LIST_BASE_URL}/{r['list']}?level={r['level id']}) by {r['creator']} · {where}"
+        w = wrong.get((r["level id"], key))
+        if w:
+            value += f"\n⚠️ **Wrong level?** The title names **{w['named']}**"
+            if yt and len(view.children) < 25:
+                view.add_item(ValidateNameButton(r["level id"], yt, f"Validate: {player or 'video'} on {r['level']}"))
+        elif (r["level id"], key) in ok:
+            value += "\n✅ Level checked by hand"
+        embed.add_field(name=video_label(r["video"], player)[:256], inline=False, value=value[:1024])
     m = re.fullmatch(r"(\d{4}-\d\d-\d\d)_(\d\d)(\d\d)", when)
     footer = f"From the check of {m.group(1)} {m.group(2)}:{m.group(3)}" if m else f"From the check {when}"
     if len(matches) > 20:
         footer = f"… and {len(matches) - 20} more · " + footer
     embed.set_footer(text=footer)
-    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    return embed, (view if view.children else None)
+
+
+@bot.tree.command(name="video", description="Find which levels and players use a video (paste its link)")
+@app_commands.describe(link="Link of the video (YouTube, Medal, Drive…) or a YouTube video ID")
+async def cmd_video(interaction: discord.Interaction, link: str):
+    if latest_video_log() is None:
+        await interaction.response.send_message("The videos have not been checked yet: they are listed after "
+                                                "the next run.", ephemeral=True)
+        return
+    rendered = video_message(video_key(link))
+    if not rendered:
+        await interaction.response.send_message(f"This video is not used on the list site: <{link.strip()}>")
+        return
+    embed, view = rendered
+    kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+    if view:
+        kwargs["view"] = view
+    await interaction.response.send_message(**kwargs)
+
+
+async def show_wrong_level(interaction, query):
+    rows = load_wrong_level()
+    if rows is None:
+        await interaction.response.send_message("The video titles have not been checked yet: they are checked "
+                                                "during the next run.", ephemeral=True)
+        return
+    title, colour = "Records possibly on the wrong level", EMBED_COLOUR
+    if query:
+        matches = find_levels(query)
+        if not matches:
+            await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
+            return
+        lv = next((x for x in matches if x["id"] == query), matches[0])
+        rows = [r for r in rows if r["id"] == lv["id"]]
+        title, colour = f"Possibly on the wrong level — {lv['name']}", list_colour(lv["list"])
+        if not rows:
+            await interaction.response.send_message(f"✅ No record of **{lv['name']}** has a video title naming "
+                                                    "another level.")
+            return
+    elif not rows:
+        await interaction.response.send_message("✅ No record has a video title naming another level.")
+        return
+    order = {lv["id"]: (LISTS.index(lv["list"]) if lv["list"] in LISTS else 9, lv["position"])
+             for lv in load_index()}
+    rows.sort(key=lambda r: (order.get(r["id"], (9, 0)), r["player"].lower()))
+    lines = [f"**[{r['name']}](<{LIST_BASE_URL}/{r['list']}?level={r['id']}>)** — "
+             f"{video_label(r['kind'], r['player'])}\n"
+             f"Title names **{r['named']}**: “{r['title'][:120]}” · [video](<{r['link']}>)" for r in rows]
+    noun = "record" if len(rows) == 1 else "records"
+    view = PagedView(title, paginate(lines, 8), interaction.user.id, "/records",
+                     footer=f"{len(rows)} {noun} · /video <link> shows a Validate button for the ones that are fine",
+                     colour=colour)
+    await view.send(interaction)
 
 
 @bot.tree.command(name="records", description="Record videos that can no longer be watched, or that are used twice")
@@ -1166,10 +1292,14 @@ async def cmd_video(interaction: discord.Interaction, link: str):
 @app_commands.choices(show=[
     app_commands.Choice(name="Unavailable videos (private, deleted…)", value="unavailable"),
     app_commands.Choice(name="Duplicate videos (same video for different players, listed twice)", value="duplicates"),
+    app_commands.Choice(name="Wrong level (the video title names another level)", value="wrong"),
 ])
 async def cmd_records(interaction: discord.Interaction, query: str = "", show: app_commands.Choice[str] = None):
     if show and show.value == "duplicates":
         await show_duplicates(interaction, query)
+        return
+    if show and show.value == "wrong":
+        await show_wrong_level(interaction, query)
         return
     videos = load_unavailable_videos()
     if videos is None:

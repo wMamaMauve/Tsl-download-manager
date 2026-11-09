@@ -32,6 +32,7 @@ DIFF_TOOL="${DIFF_TOOL:-$SCRIPT_DIR/level_diff.sh}"   # object-level comparison 
 RECORD_CHECK="${RECORD_CHECK:-1}"   # 1 = check that the verification / showcase / record videos still work
 RECORD_TOOL="${RECORD_TOOL:-$SCRIPT_DIR/record_check.sh}"
 DUPLICATES_AWK="${DUPLICATES_AWK:-$SCRIPT_DIR/video_duplicates.awk}"
+NAME_CHECK_AWK="${NAME_CHECK_AWK:-$SCRIPT_DIR/name_check.awk}"
 RECORD_ANNOUNCE_MAX="${RECORD_ANNOUNCE_MAX:-10}"   # videos listed one by one on Discord (then a count)
 
 STATE="$DATA_DIR/state.tsv"
@@ -616,6 +617,34 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
         nc_put "duplicate_videos.tsv"
     fi
 
+    # records whose video title names another level ("Shitty Acheron 100%" given for Shitty NETWORK)
+    WRONG="$DATA_DIR/records_wrong_level.tsv"
+    NAME_OK="$DATA_DIR/records_name_ok.tsv"   # entries validated by hand with the bot's /video button
+    [ -f "$NAME_OK" ] || : > "$NAME_OK"
+    for lst in $LISTS; do [ -f "$TMP/$lst.tsv" ] && cat "$TMP/$lst.tsv"; done > "$TMP/levels_all.tsv"
+    if [ -f "$NAME_CHECK_AWK" ] && [ -f "$DATA_DIR/records_state.tsv" ] &&
+        awk -f "$NAME_CHECK_AWK" "$TMP/levels_all.tsv" "$NAME_OK" "$DATA_DIR/records_state.tsv" "$TMP/videos.tsv" \
+            "$TMP/videos.tsv" > "$TMP/wrong.tsv"; then
+        VIDEOS_CHECKED=1
+        wrong_count=$(wc -l < "$TMP/wrong.tsv")
+        log "  $wrong_count records whose video title names another level"
+        if [ ! -f "$WRONG" ]; then
+            note "VIDEOS: first check, $wrong_count records have a video whose title names another level"
+            [ "$wrong_count" -gt 0 ] && notify_rec "First check of the video titles: **$wrong_count** records have a video whose title names another level. Use \`/records\` with \`show: Wrong level\` to see them, and \`/video\` to validate the ones that are fine."
+        else
+            n=0
+            while IFS=$'\t' read -r vlst vid vname vkind vuser vlink vtitle named; do
+                n=$((n + 1))
+                note "[$vlst] WRONG LEVEL? $(video_label "$vkind" "$vuser") on $vname ($vid): the title names $named — \"$vtitle\" $vlink"
+                [ "$n" -le "$RECORD_ANNOUNCE_MAX" ] && notify_rec "[$vlst] **Wrong level?** $(video_label "$vkind" "$vuser") on [$vname](<${LIST_BASE_URL%/}/$vlst?level=$vid>): the video title names **$named** — “$vtitle” · [video](<$vlink>)"
+            done < <(awk -F'\t' 'FILENAME == ARGV[1] { old[$1 SUBSEP $2 SUBSEP $6] = 1; next } !(($1 SUBSEP $2 SUBSEP $6) in old)' "$WRONG" "$TMP/wrong.tsv")
+            [ "$n" -gt "$RECORD_ANNOUNCE_MAX" ] && notify_rec "…and $((n - RECORD_ANNOUNCE_MAX)) more records with a title naming another level (\`/records\` lists them all)."
+        fi
+        mv "$TMP/wrong.tsv" "$WRONG"
+        { printf 'list\tid\tlevel\tkind\tplayer\tlink\ttitle\tlevels named in the title\n'; cat "$WRONG"; } > "$FILES/wrong_level_videos.tsv"
+        nc_put "wrong_level_videos.tsv"
+    fi
+
     # log of this run: every video with its level, creator, player and result
     # (files/records-log/YYYY-MM-DD_HHMM.tsv, kept in Nextcloud; local copies older than RECORD_LOG_DAYS are removed)
     rlog="records-log/$(date '+%Y-%m-%d_%H%M').tsv"
@@ -624,6 +653,7 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
     : > "$TMP/empty"
     dupfile="${DUPS:-}"; [ -f "$dupfile" ] || dupfile="$TMP/empty"
     statefile="$DATA_DIR/records_state.tsv"; [ -f "$statefile" ] || statefile="$TMP/empty"
+    wrongfile="${WRONG:-}"; [ -f "$wrongfile" ] || wrongfile="$TMP/empty"
     awk -F'\t' -v OFS='\t' -v start="$VIDEO_CHECK_START" -v now="$(date +%s)" '
         function label(st) {
             if (st == "ok") return "available"; if (st == "private") return "private"
@@ -631,17 +661,20 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
             if (st == "invalid") return "invalid link"; return st
         }
         FILENAME == ARGV[1] { author[$1] = $2; next }
-        FILENAME == ARGV[2] { st[$1] = $2; at[$1] = $3; next }
+        FILENAME == ARGV[2] { st[$1] = $2; at[$1] = $3; ti[$1] = $5; next }
         FILENAME == ARGV[3] { dup[$3 SUBSEP $4 SUBSEP $7 SUBSEP $8] = ($2 == "twice" ? "listed twice" : "same video for different players"); next }
-        FNR == 1 { print "list", "level", "level id", "creator", "video", "player", "link", "result", "checked", "duplicate" }
+        FILENAME == ARGV[4] { wrong[$1 SUBSEP $2 SUBSEP $6] = $8; next }
+        FNR == 1 { print "list", "level", "level id", "creator", "video", "player", "link", "result", "checked", "duplicate", "title", "title names another level" }
         {
             if ($6 in st) {
                 result = label(st[$6]); d = int((now - at[$6]) / 86400)
                 checked = (at[$6] >= start) ? "this run" : (d == 0 ? "earlier today (still valid)" : d " day" (d > 1 ? "s" : "") " ago (still valid)")
             } else { result = "could not be checked"; checked = "-" }
             k = $1 SUBSEP $2 SUBSEP $5 SUBSEP $6
-            print $1, $3, $2, ($2 in author ? author[$2] : "?"), $4, ($5 == "" ? "-" : $5), $6, result, checked, (k in dup ? dup[k] : "-")
-        }' "$TMP/authors.tsv" "$statefile" "$dupfile" "$TMP/videos.tsv" > "$FILES/$rlog"
+            w = $1 SUBSEP $2 SUBSEP $6
+            print $1, $3, $2, ($2 in author ? author[$2] : "?"), $4, ($5 == "" ? "-" : $5), $6, result, checked, \
+                (k in dup ? dup[k] : "-"), (ti[$6] == "" ? "-" : ti[$6]), (w in wrong ? wrong[w] : "-")
+        }' "$TMP/authors.tsv" "$statefile" "$dupfile" "$wrongfile" "$TMP/videos.tsv" > "$FILES/$rlog"
     log "  log of the check: $rlog"
     nc_put "$rlog"
     find "$FILES/records-log" -name '*.tsv' -mtime +"${RECORD_LOG_DAYS:-30}" -delete 2>/dev/null
@@ -679,7 +712,7 @@ fi
 # one announcement for the levels, one for the record videos
 [ "$RUN_MODE" = records ] || discord_send "TSL Levels Tracking result" "$TMP/discord.txt" "$summary" 1
 [ "${VIDEOS_CHECKED:-0}" = 1 ] && discord_send "TSL Records Tracking result" "$TMP/discord_records.txt" \
-    "${total_videos:-0} videos on the site · ${unav:-0} unavailable${unav_detail:+ ($unav_detail)} · ${dup_count:-0} used more than once" 2
+    "${total_videos:-0} videos on the site · ${unav:-0} unavailable${unav_detail:+ ($unav_detail)} · ${dup_count:-0} used more than once · ${wrong_count:-0} possibly on the wrong level" 2
 if [ "$RUN_MODE" != records ]; then   # videos only: /status keeps showing the numbers of the last level run
     printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
     # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)
