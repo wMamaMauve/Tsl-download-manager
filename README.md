@@ -1,96 +1,98 @@
 # TSL download manager
 
-Télécharge automatiquement tous les niveaux de **The Shitty List** ([TSL](https://tsl.pages.dev/list/tsl) et [TSL+](https://tsl.pages.dev/list/tslplus)) en fichiers **`.gmd`**, détecte quand un niveau est mis à jour par son créateur et envoie le tout dans **Nextcloud**.
+Automatically downloads every level of **The Shitty List** ([TSL](https://tsl.pages.dev/list/tsl) and [TSL+](https://tsl.pages.dev/list/tslplus)) as **`.gmd`** files, detects when a level is changed, deleted or moved in the ranking, stores everything in **Nextcloud** and announces the changes on **Discord**.
 
-Tout est en bash : il faut seulement `curl`, `awk`, `sed`, `od` et `sha256sum`, présents sur quasiment tous les Linux. Python n'est pas nécessaire.
+The sync script is pure bash: it only needs `curl`, `awk`, `sed`, `od` and `sha256sum`, available on almost any Linux. The optional Discord bot uses Python (installed for you by `install-bot.sh`).
 
-## Installation (sur le serveur, en root)
+## Installation (on the server, as root)
 
 ```bash
-git clone https://github.com/wmamamauve/tsl-download-manager.git
-cd tsl-download-manager
-./install.sh            # passage automatique chaque nuit vers 4 h (./install.sh 13 pour 13 h)
-nano /etc/tsl-sync.conf # renseigne NC_URL, NC_USER, NC_PASS
-/opt/tsl-sync/tsl-sync.sh   # premier lancement à la main
+git clone -b claude/youthful-curie-myzxdg https://github.com/wMamaMauve/Tsl-download-manager.git
+cd Tsl-download-manager
+./install.sh            # automatic run every night around 4 am (./install.sh 13 for 1 pm)
+nano /etc/tsl-sync.conf # fill in NC_URL, NC_USER, NC_PASS
+systemctl start --no-block tsl-sync && journalctl -u tsl-sync -f   # first run
 ```
 
-Le premier lancement télécharge environ 630 niveaux avec une pause de 2 s entre chaque requête, ce qui prend une bonne demi-heure. Les passages suivants ne téléchargent que ce qui a changé.
+Every run downloads all ~630 levels with a 3 s pause between requests, which takes about 35 minutes.
 
-**Mot de passe Nextcloud** : utilise un *mot de passe d'application* (Nextcloud → Paramètres → Sécurité → « Créer un mot de passe d'application »), pas ton vrai mot de passe. Le fichier `/etc/tsl-sync.conf` n'est lisible que par root.
+**Nextcloud password**: use an *app password* (Nextcloud → Settings → Security → "Create new app password"), not your real password. `/etc/tsl-sync.conf` is only readable by root.
 
-## Stockage local puis envoi groupé
+**Updating**: `cd ~/Tsl-download-manager && git pull && ./install.sh` (it never overwrites your config).
 
-Les fichiers sont d'abord enregistrés sur le serveur dans `/var/lib/tsl-sync/fichiers/`, puis **tout est envoyé dans Nextcloud en une fois à la fin du passage**. Si Nextcloud est injoignable, les fichiers restent dans la file d'attente (`/var/lib/tsl-sync/a_envoyer.tsv`) et repartent au passage suivant. Pour envoyer au fur et à mesure à la place, mets `UPLOAD_AT_END=0` dans la config.
+## Local storage, then upload
 
-## Ce que tu obtiens dans Nextcloud
+Files are first stored on the server in `/var/lib/tsl-sync/files/`, then **everything is uploaded to Nextcloud at once at the end of the run**. If Nextcloud is unreachable, the files stay in the queue (`/var/lib/tsl-sync/upload_queue.tsv`) and are sent on the next run. To upload as you go instead, set `UPLOAD_AT_END=0`.
+
+## What you get in Nextcloud
 
 ```
 Geometry Dash/TSL/
 ├── tsl/
 │   ├── Shitty NETWORK (132801785).gmd
 │   ├── ...
-│   └── index.tsv            ← classement actuel (position, id, nom, auteur, fichier)
+│   └── index.tsv            ← current ranking (position, id, name, author, file)
 ├── tslplus/
 │   └── ...
-├── 2026-11-10/               ← un dossier par jour de passage :
-│   ├── tsl/...gmd           ←   niveaux nouveaux ou modifiés ce jour-là
-│   └── changements.log      ←   journal du jour ("Aucun changement." sinon)
-├── historique/
+├── 2026-11-10/              ← one folder per run day:
+│   ├── tsl/...gmd           ←   levels new or changed that day
+│   └── changes.log          ←   log of the day ("No changes." otherwise)
+├── history/
 │   └── Shitty NETWORK (132801785)/
-│       └── 2026-11-09_v1.gmd   ← anciennes versions des niveaux modifiés
-└── changements.log          ← journal de tout ce qui a changé
+│       └── 2026-11-09_v1.gmd   ← previous versions of changed levels
+└── changes.log              ← log of everything that changed
 ```
 
-Les `.gmd` s'importent dans le jeu avec **GDShare** (via Geode) : ils arrivent dans tes niveaux de l'éditeur.
+The `.gmd` files can be imported in the game with **GDShare** (via Geode): they show up in your editor levels.
 
-Les dossiers du jour sont des copies faites directement dans Nextcloud (rien n'est renvoyé depuis le serveur). Pour les désactiver : `DAILY=0` dans la config.
+The folders of the day are copies made directly in Nextcloud (nothing is re-uploaded). To disable them: `DAILY=0` in the config.
 
-## Bot Discord
+## Discord bot
 
-Le bot publie dans un salon tout ce qui change (niveau modifié, infos modifiées, supprimé, réapparu, entrée/sortie de liste) et répond aux commandes :
+The bot posts everything that changes to a channel (level modified, info changed, deleted, reappeared, entered/left the list) and answers commands:
 
-| Commande | Effet |
+| Command | What it does |
 |---|---|
-| `/niveau <nom ou id>` | infos du niveau, derniers changements, lien GDBrowser **et le fichier .gmd en pièce jointe** |
-| `/changements [jours]` | ce qui a changé ces derniers jours |
-| `/liste <tsl\|tslplus> [page]` | le classement |
-| `/statut` | résultat du dernier passage |
-| `/verifier` | (admins) lance un passage maintenant |
+| `/level <name or id>` | level info, latest changes, GDBrowser link **and the .gmd file as an attachment** |
+| `/changes [days]` | what changed in the last days |
+| `/list <tsl\|tslplus> [page]` | the ranking |
+| `/status` | result of the last run |
+| `/check` | (admins) start a run now |
 
-Installation : `./install-bot.sh` (installe Python et discord.py), puis renseigne `DISCORD_BOT_TOKEN` et `DISCORD_CHANNEL_ID` dans `/etc/tsl-sync.conf` (la marche à suivre est dans le fichier) et `systemctl restart tsl-bot`. Journal : `journalctl -u tsl-bot -f`.
+Setup: `./install-bot.sh` (installs Python and discord.py), then fill in `DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID` in `/etc/tsl-sync.conf` (the steps are explained in the file) and run `systemctl restart tsl-bot`. Log: `journalctl -u tsl-bot -f`.
 
-## Détection des changements
+## Change detection
 
-À chaque passage, le script :
+On every run, the script:
 
-1. relit les deux listes sur tsl.pages.dev ;
-2. note dans `changements.log` les **entrées**, **sorties** et **changements de classement** ;
-3. re-télécharge **chaque** niveau et compare tout son contenu (empreinte SHA-256 des données) — le numéro de version n'est pas fiable ;
-4. compare aussi les infos (nom, description, musique, étoiles, difficulté, featured/epic…) et signale lesquelles ont changé ;
-   un niveau qui disparaît des serveurs GD est signalé **SUPPRIMÉ** (sa dernière copie est gardée), puis **RÉAPPARU** s'il revient ;
-5. si le contenu a vraiment changé, l'ancienne version part dans `historique/` et la nouvelle remplace le fichier (**MODIFIÉ** dans le journal).
+1. reads both lists on tsl.pages.dev;
+2. writes the **entries**, **exits** and **ranking changes** to `changes.log`;
+3. downloads **every** level again and compares all its data (SHA-256 of the level data) — the version number is not reliable;
+4. also compares the info (name, description, song, stars, difficulty, featured/epic…) and reports which ones changed;
+   a level that disappears from the GD servers is reported **DELETED** (its last copy is kept), then **REAPPEARED** if it comes back;
+5. if the level data really changed, the previous version goes to `history/` and the new one replaces the file (**MODIFIED** in the log).
 
-Exemple de journal :
+Log example:
 
 ```
-2026-11-10 04:21:07 [tsl] ENTRÉE dans la liste : #12 Shitty Truc (123456789)
-2026-11-10 04:21:07 [tsl] CLASSEMENT : Shitty Nhelv (106481744) #3 -> #4
-2026-11-10 04:23:40 [tsl] MODIFIÉ : Shitty NETWORK (132801785) v1 -> v2 (ancienne version dans historique/...)
+2026-11-10 04:21:07 [tsl] ENTERED the list: #12 Shitty Something (123456789)
+2026-11-10 04:21:07 [tsl] RANKING: Shitty Nhelv (106481744) #3 -> #4
+2026-11-10 04:23:40 [tsl] MODIFIED: Shitty NETWORK (132801785) v1 -> v2 (previous version in history/...)
 ```
 
-## Commandes utiles
+## Useful commands
 
-| Action | Commande |
+| Action | Command |
 |---|---|
-| Lancer un passage maintenant | `/opt/tsl-sync/tsl-sync.sh` |
-| Renvoyer **tous** les fichiers locaux vers Nextcloud | `RESYNC=1 /opt/tsl-sync/tsl-sync.sh` |
-| Voir le journal (systemd) | `journalctl -u tsl-sync` |
-| Prochain passage prévu | `systemctl list-timers tsl-sync.timer` |
-| Mettre à jour le script | `git pull && ./install.sh` |
+| Run now | `systemctl start --no-block tsl-sync` |
+| Re-upload **all** local files to Nextcloud | `RESYNC=1 /opt/tsl-sync/tsl-sync.sh` |
+| Show the sync log | `journalctl -u tsl-sync` |
+| Next scheduled run | `systemctl list-timers tsl-sync.timer` |
+| Show the bot log | `journalctl -u tsl-bot -f` |
 
-## Remarques
+## Notes
 
-- Les niveaux présents dans les deux listes ne sont stockés qu'une fois, dans `tsl/` ; l'index de `tslplus` pointe vers ce fichier.
-- Un niveau supprimé ou rendu privé sur les serveurs GD est signalé comme « en échec » ; son dernier `.gmd` reste conservé.
-- Les serveurs de Geometry Dash bloquent les IP de datacenter (Cloudflare, erreur 1005). Le script doit donc tourner sur une machine qui y a accès. Teste avec :
+- Levels that are in both lists are stored only once, in `tsl/`; the `tslplus` index points to that file.
+- The Geometry Dash servers block datacenter IPs (Cloudflare, error 1005). The script must run on a machine that can reach them. Test with:
   `curl -s -A "" -X POST https://www.boomlings.com/database/downloadGJLevel22.php -d "levelID=132801785&secret=Wmfd2893gb7" | head -c 100`
+- Upgrading from the French version: local and Nextcloud folders (`fichiers`, `historique`, `changements.log`…) are renamed automatically on the first run.

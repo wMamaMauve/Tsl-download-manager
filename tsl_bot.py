@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Bot Discord pour tsl-sync.
+"""Discord bot for tsl-sync.
 
-- Publie dans un salon les changements détectés par tsl-sync.sh
-  (fichiers déposés dans DATA_DIR/notifications/).
-- Commandes : /niveau, /changements, /liste, /statut, /verifier.
+- Posts the changes detected by tsl-sync.sh to a channel
+  (files dropped in DATA_DIR/notifications/).
+- Slash commands: /level, /changes, /list, /status, /check.
 
-Configuration : la même que tsl-sync (/etc/tsl-sync.conf ou TSL_CONF) :
-    DISCORD_BOT_TOKEN="..."      jeton du bot (Discord Developer Portal)
-    DISCORD_CHANNEL_ID="..."     salon où publier les annonces
-    DISCORD_GUILD_ID="..."       (optionnel) serveur Discord, pour que les commandes apparaissent tout de suite
+Configuration: the same file as tsl-sync (/etc/tsl-sync.conf or TSL_CONF):
+    DISCORD_BOT_TOKEN="..."      bot token (Discord Developer Portal)
+    DISCORD_CHANNEL_ID="..."     channel where announcements are posted
+    DISCORD_GUILD_ID="..."       (optional) Discord server, so commands show up immediately
 """
 
 import asyncio
@@ -26,8 +26,8 @@ from discord import app_commands
 log = logging.getLogger("tsl-bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-DISCORD_MAX = 1900          # limite d'un message Discord (2000) avec une marge
-UPLOAD_MAX = 10 * 1024**2   # taille max d'une pièce jointe pour un bot
+DISCORD_MAX = 1900          # Discord message limit (2000) with a margin
+UPLOAD_MAX = 10 * 1024**2   # max attachment size for a bot
 
 
 # --------------------------------------------------------------------------- configuration
@@ -57,8 +57,14 @@ def setting(key, default=""):
     return os.environ.get(key) or CONF.get(key) or default
 
 
+def first_existing(*paths):
+    for p in paths:
+        if p.exists():
+            return p
+    return paths[0]
+
+
 DATA_DIR = Path(setting("DATA_DIR", "/var/lib/tsl-sync"))
-FILES = DATA_DIR / "fichiers"
 LISTS = setting("LISTS", "tsl tslplus").split()
 TOKEN = setting("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(setting("DISCORD_CHANNEL_ID", "0") or 0)
@@ -67,7 +73,11 @@ NOTIF_DIR = DATA_DIR / "notifications"
 LIST_NAMES = {"tsl": "The Shitty List", "tslplus": "The Shitty List Plus"}
 
 
-# --------------------------------------------------------------------------- lecture des données
+def files_dir():
+    return first_existing(DATA_DIR / "files", DATA_DIR / "fichiers")
+
+
+# --------------------------------------------------------------------------- data access
 def read_tsv(path):
     try:
         lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
@@ -77,16 +87,16 @@ def read_tsv(path):
 
 
 def load_index():
-    """Classement actuel : liste de dicts (liste, position, id, nom, auteur, fichier)."""
+    """Current ranking: list of dicts (list, position, id, name, author, file)."""
     levels = []
     for lst in LISTS:
-        rows = read_tsv(FILES / lst / "index.tsv")
+        rows = read_tsv(files_dir() / lst / "index.tsv")
         for row in rows[1:]:
             if len(row) < 5:
                 continue
             pos, lid, name, author, rel = row[:5]
-            levels.append({"liste": lst, "position": int(pos) if pos.isdigit() else 0,
-                           "id": lid, "nom": name, "auteur": author, "fichier": rel})
+            levels.append({"list": lst, "position": int(pos) if pos.isdigit() else 0,
+                           "id": lid, "name": name, "author": author, "file": rel})
     return levels
 
 
@@ -95,13 +105,15 @@ def load_state():
     for row in read_tsv(DATA_DIR / "state.tsv"):
         row += [""] * (7 - len(row))
         lid, ver, _sha, lst, rel, _info, status = row[:7]
-        state[lid] = {"version": ver, "liste": lst, "fichier": rel, "statut": status or "ok"}
+        state[lid] = {"version": "" if ver == "-" else ver, "list": lst, "file": rel,
+                      "status": "deleted" if status in ("deleted", "supprime") else "ok"}
     return state
 
 
 def load_log():
+    path = first_existing(DATA_DIR / "changes.log", DATA_DIR / "changements.log")
     try:
-        return (DATA_DIR / "changements.log").read_text(encoding="utf-8", errors="replace").splitlines()
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
 
@@ -109,17 +121,19 @@ def load_log():
 def find_levels(query):
     q = query.strip().lower()
     levels = load_index()
-    exact = [lv for lv in levels if lv["id"] == q or lv["nom"].lower() == q]
+    exact = [lv for lv in levels if lv["id"] == q or lv["name"].lower() == q]
     if exact:
         return exact
-    return [lv for lv in levels if q in lv["nom"].lower() or q in lv["auteur"].lower()]
+    return [lv for lv in levels if q in lv["name"].lower() or q in lv["author"].lower()]
 
 
-IMPORTANT = ("MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE", "NOUVEAU")
+# log keywords (English, plus the French ones written by older versions)
+IMPORTANT = ("MODIFIED", "INFO CHANGED", "DELETED", "REAPPEARED", "ENTERED", "LEFT",
+             "MODIFIÉ", "INFOS MODIFIÉES", "SUPPRIMÉ", "RÉAPPARU", "ENTRÉE", "SORTIE")
 
 
 def split_messages(lines, header=""):
-    """Regroupe des lignes en messages de moins de 2000 caractères."""
+    """Groups lines into messages under 2000 characters."""
     messages, current = [], header
     for line in lines:
         if len(line) > DISCORD_MAX:
@@ -134,11 +148,9 @@ def split_messages(lines, header=""):
 
 
 def short_log_line(line):
-    """'2026-11-10 04:21:07 [tsl] MODIFIÉ : …' -> '`10/11 04:21` [tsl] MODIFIÉ : …'"""
-    m = re.match(r"(\d{4})-(\d\d)-(\d\d) (\d\d:\d\d):\d\d (.*)", line)
-    if not m:
-        return line
-    return f"`{m.group(3)}/{m.group(2)} {m.group(4)}` {m.group(5)}"
+    """'2026-11-10 04:21:07 [tsl] MODIFIED: …' -> '`11-10 04:21` [tsl] MODIFIED: …'"""
+    m = re.match(r"\d{4}-(\d\d-\d\d) (\d\d:\d\d):\d\d (.*)", line)
+    return f"`{m.group(1)} {m.group(2)}` {m.group(3)}" if m else line
 
 
 # --------------------------------------------------------------------------- bot
@@ -157,17 +169,17 @@ class TSLBot(discord.Client):
         self.loop.create_task(self.notification_loop())
 
     async def on_ready(self):
-        log.info("Connecté en tant que %s", self.user)
+        log.info("Logged in as %s", self.user)
 
     async def notification_loop(self):
-        """Publie les fichiers de notifications déposés par tsl-sync.sh."""
+        """Posts the notification files dropped by tsl-sync.sh."""
         await self.wait_until_ready()
         NOTIF_DIR.mkdir(parents=True, exist_ok=True)
         while not self.is_closed():
             try:
                 await self.flush_notifications()
-            except Exception:  # on ne doit jamais arrêter la boucle
-                log.exception("erreur lors de l'envoi des notifications")
+            except Exception:  # never stop the loop
+                log.exception("error while posting notifications")
             await asyncio.sleep(30)
 
     async def flush_notifications(self):
@@ -187,124 +199,126 @@ class TSLBot(discord.Client):
 bot = TSLBot()
 
 
-async def niveau_autocomplete(_interaction, current):
+async def level_autocomplete(_interaction, current):
     levels = find_levels(current) if current else load_index()[:25]
-    return [app_commands.Choice(name=f"{lv['nom']} — {lv['liste']} #{lv['position']}"[:100], value=lv["id"])
+    return [app_commands.Choice(name=f"{lv['name']} — {lv['list']} #{lv['position']}"[:100], value=lv["id"])
             for lv in levels[:25]]
 
 
-@bot.tree.command(name="niveau", description="Infos et fichier .gmd d'un niveau de la liste")
-@app_commands.describe(recherche="Nom, auteur ou ID du niveau")
-@app_commands.autocomplete(recherche=niveau_autocomplete)
-async def cmd_niveau(interaction: discord.Interaction, recherche: str):
-    matches = find_levels(recherche)
+@bot.tree.command(name="level", description="Info and .gmd file of a level from the list")
+@app_commands.describe(query="Name, creator or ID of the level")
+@app_commands.autocomplete(query=level_autocomplete)
+async def cmd_level(interaction: discord.Interaction, query: str):
+    matches = find_levels(query)
     if not matches:
-        await interaction.response.send_message(f"Aucun niveau trouvé pour « {recherche} ».", ephemeral=True)
+        await interaction.response.send_message(f"No level found for “{query}”.", ephemeral=True)
         return
-    if len(matches) > 1 and not any(lv["id"] == recherche for lv in matches):
-        lines = [f"• **{lv['nom']}** de {lv['auteur']} — {lv['liste']} #{lv['position']} (`{lv['id']}`)"
+    if len(matches) > 1 and not any(lv["id"] == query for lv in matches):
+        lines = [f"• **{lv['name']}** by {lv['author']} — {lv['list']} #{lv['position']} (`{lv['id']}`)"
                  for lv in matches[:15]]
-        more = f"\n… et {len(matches) - 15} autres" if len(matches) > 15 else ""
+        more = f"\n… and {len(matches) - 15} more" if len(matches) > 15 else ""
         await interaction.response.send_message(
-            f"{len(matches)} niveaux correspondent, précise ta recherche :\n" + "\n".join(lines) + more,
+            f"{len(matches)} levels match, please be more specific:\n" + "\n".join(lines) + more,
             ephemeral=True)
         return
-    lv = next((x for x in matches if x["id"] == recherche), matches[0])
+    lv = next((x for x in matches if x["id"] == query), matches[0])
     st = load_state().get(lv["id"], {})
     history = [short_log_line(line) for line in load_log() if f"({lv['id']})" in line][-6:]
+    deleted = st.get("status") == "deleted"
 
-    embed = discord.Embed(title=lv["nom"], url=f"https://gdbrowser.com/{lv['id']}",
-                          colour=0xE74C3C if st.get("statut") == "supprime" else 0x3498DB)
-    embed.add_field(name="Créateur", value=lv["auteur"] or "?", inline=True)
-    embed.add_field(name="Liste", value=f"{LIST_NAMES.get(lv['liste'], lv['liste'])} — #{lv['position']}", inline=True)
+    embed = discord.Embed(title=lv["name"], url=f"https://gdbrowser.com/{lv['id']}",
+                          colour=0xE74C3C if deleted else 0x3498DB)
+    embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
+    embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
     embed.add_field(name="Version", value=st.get("version") or "?", inline=True)
-    embed.add_field(name="Statut", value="🗑️ supprimé des serveurs GD (copie conservée)"
-                    if st.get("statut") == "supprime" else "✅ en ligne", inline=True)
+    embed.add_field(name="Status", value="🗑️ deleted from the GD servers (copy kept)" if deleted else "✅ online",
+                    inline=True)
     if history:
-        embed.add_field(name="Derniers changements", value="\n".join(history)[:1024], inline=False)
+        embed.add_field(name="Latest changes", value="\n".join(history)[:1024], inline=False)
     embed.set_thumbnail(url=f"https://levelthumbs.prevter.me/thumbnail/{lv['id']}")
 
-    path = FILES / lv["fichier"] if lv["fichier"] and not lv["fichier"].startswith("(") else None
+    path = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
     if path and path.is_file() and path.stat().st_size <= UPLOAD_MAX:
         await interaction.response.send_message(embed=embed, file=discord.File(path, filename=path.name))
     else:
-        note = "" if not path or not path.is_file() else "\n_(fichier .gmd trop gros pour Discord, voir Nextcloud)_"
-        await interaction.response.send_message(content=note or None, embed=embed)
+        note = None if not path or not path.is_file() else "_(.gmd file too large for Discord, see Nextcloud)_"
+        await interaction.response.send_message(content=note, embed=embed)
 
 
-@bot.tree.command(name="changements", description="Ce qui a changé ces derniers jours")
-@app_commands.describe(jours="Nombre de jours (défaut : 7)", tout="Inclure aussi les changements de classement")
-async def cmd_changements(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 365] = 7,
-                          tout: bool = False):
-    since = (dt.datetime.now() - dt.timedelta(days=jours)).strftime("%Y-%m-%d")
+@bot.tree.command(name="changes", description="What changed in the last days")
+@app_commands.describe(days="Number of days (default: 7)", everything="Also include ranking changes")
+async def cmd_changes(interaction: discord.Interaction, days: app_commands.Range[int, 1, 365] = 7,
+                      everything: bool = False):
+    since = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
     lines = [line for line in load_log() if line[:10] >= since
-             and (tout or any(f"] {k}" in line for k in IMPORTANT if k != "NOUVEAU"))]
+             and (everything or any(f"] {k}" in line for k in IMPORTANT))]
     if not lines:
-        await interaction.response.send_message(f"Aucun changement ces {jours} derniers jours.")
+        await interaction.response.send_message(f"No changes in the last {days} days.")
         return
     msgs = split_messages([short_log_line(x) for x in lines[-200:]],
-                          header=f"**Changements des {jours} derniers jours** ({len(lines)})")
+                          header=f"**Changes in the last {days} days** ({len(lines)})")
     await interaction.response.send_message(msgs[0], allowed_mentions=discord.AllowedMentions.none())
     for msg in msgs[1:5]:
         await interaction.followup.send(msg, allowed_mentions=discord.AllowedMentions.none())
     if len(msgs) > 5:
-        await interaction.followup.send("… liste tronquée, utilise un nombre de jours plus petit.")
+        await interaction.followup.send("… list truncated, use a smaller number of days.")
 
 
-@bot.tree.command(name="liste", description="Afficher le classement")
-@app_commands.describe(liste="Quelle liste", page="Page (25 niveaux par page)")
-@app_commands.choices(liste=[app_commands.Choice(name=LIST_NAMES.get(x, x), value=x) for x in LISTS])
-async def cmd_liste(interaction: discord.Interaction, liste: app_commands.Choice[str],
-                    page: app_commands.Range[int, 1, 100] = 1):
-    levels = sorted((lv for lv in load_index() if lv["liste"] == liste.value), key=lambda x: x["position"])
+@bot.tree.command(name="list", description="Show the ranking")
+@app_commands.describe(name="Which list", page="Page (25 levels per page)")
+@app_commands.choices(name=[app_commands.Choice(name=LIST_NAMES.get(x, x), value=x) for x in LISTS])
+async def cmd_list(interaction: discord.Interaction, name: app_commands.Choice[str],
+                   page: app_commands.Range[int, 1, 100] = 1):
+    levels = sorted((lv for lv in load_index() if lv["list"] == name.value), key=lambda x: x["position"])
     chunk = levels[(page - 1) * 25: page * 25]
     if not chunk:
-        await interaction.response.send_message("Page vide.", ephemeral=True)
+        await interaction.response.send_message("Empty page.", ephemeral=True)
         return
     pages = (len(levels) + 24) // 25
-    lines = [f"`#{lv['position']:>3}` **{lv['nom']}** — {lv['auteur']}" for lv in chunk]
+    lines = [f"`#{lv['position']:>3}` **{lv['name']}** — {lv['author']}" for lv in chunk]
     await interaction.response.send_message(
-        f"**{liste.name}** — page {page}/{pages}\n" + "\n".join(lines),
+        f"**{name.name}** — page {page}/{pages}\n" + "\n".join(lines),
         allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.tree.command(name="statut", description="Résultat du dernier passage de tsl-sync")
-async def cmd_statut(interaction: discord.Interaction):
+@bot.tree.command(name="status", description="Result of the last tsl-sync run")
+async def cmd_status(interaction: discord.Interaction):
+    path = first_existing(DATA_DIR / "last_run.txt", DATA_DIR / "dernier_passage.txt")
     try:
-        last = (DATA_DIR / "dernier_passage.txt").read_text(encoding="utf-8").strip()
+        last = path.read_text(encoding="utf-8").strip()
     except OSError:
-        last = "Aucun passage enregistré pour l'instant."
+        last = "No run recorded yet."
     state = load_state()
-    deleted = sum(1 for s in state.values() if s["statut"] == "supprime")
-    counts = ", ".join(f"{LIST_NAMES.get(x, x)} : {sum(1 for lv in load_index() if lv['liste'] == x)}"
-                       for x in LISTS)
+    deleted = sum(1 for s in state.values() if s["status"] == "deleted")
+    index = load_index()
+    counts = ", ".join(f"{LIST_NAMES.get(x, x)}: {sum(1 for lv in index if lv['list'] == x)}" for x in LISTS)
     running = subprocess.run(["systemctl", "is-active", "--quiet", "tsl-sync"], check=False,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     await interaction.response.send_message(
-        f"**Dernier passage** : {last}\n**Niveaux suivis** : {counts}\n"
-        f"**Supprimés des serveurs GD** : {deleted}\n"
-        f"**Passage en cours** : {'oui ⏳' if running else 'non'}")
+        f"**Last run**: {last}\n**Tracked levels**: {counts}\n"
+        f"**Deleted from the GD servers**: {deleted}\n"
+        f"**Run in progress**: {'yes ⏳' if running else 'no'}")
 
 
-@bot.tree.command(name="verifier", description="Lancer un passage de vérification maintenant")
+@bot.tree.command(name="check", description="Start a check run now")
 @app_commands.default_permissions(manage_guild=True)
-async def cmd_verifier(interaction: discord.Interaction):
+async def cmd_check(interaction: discord.Interaction):
     res = subprocess.run(["systemctl", "start", "--no-block", "tsl-sync"], capture_output=True, text=True,
                          check=False)
     if res.returncode == 0:
         await interaction.response.send_message(
-            "⏳ Passage lancé (environ 35 min). Les changements seront annoncés ici à la fin.")
+            "⏳ Run started (about 35 min). Changes will be announced here when it is done.")
     else:
-        await interaction.response.send_message(f"Impossible de lancer le passage : {res.stderr.strip()[:500]}",
+        await interaction.response.send_message(f"Could not start the run: {res.stderr.strip()[:500]}",
                                                 ephemeral=True)
 
 
 def main():
     if not TOKEN:
-        raise SystemExit("DISCORD_BOT_TOKEN manquant dans /etc/tsl-sync.conf")
+        raise SystemExit("DISCORD_BOT_TOKEN is missing in /etc/tsl-sync.conf")
     if not CHANNEL_ID:
-        log.warning("DISCORD_CHANNEL_ID manquant : les annonces automatiques sont désactivées")
+        log.warning("DISCORD_CHANNEL_ID is missing: automatic announcements are disabled")
     bot.run(TOKEN, log_handler=None)
 
 

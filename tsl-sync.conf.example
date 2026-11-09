@@ -1,38 +1,38 @@
-# Configuration de tsl-sync — à copier dans /etc/tsl-sync.conf (chmod 600)
+# tsl-sync configuration — copy to /etc/tsl-sync.conf (chmod 600)
 
-# --- Nextcloud ---------------------------------------------------------------
-# Adresse de ton Nextcloud (sans /remote.php...)
-NC_URL="https://cloud.exemple.fr"
-# Ton identifiant Nextcloud
-NC_USER="moi"
-# Mot de passe d'APPLICATION (Nextcloud > Paramètres > Sécurité > "Créer un mot de passe d'application")
+# --- Nextcloud ----------------------------------------------------------------
+# Address of your Nextcloud (without /remote.php...)
+NC_URL="https://cloud.example.com"
+# Your Nextcloud username
+NC_USER="me"
+# APP password (Nextcloud > Settings > Security > "Create new app password")
 NC_PASS="xxxxx-xxxxx-xxxxx-xxxxx-xxxxx"
-# Dossier de destination dans ton Nextcloud
+# Destination folder in your Nextcloud
 NC_DIR="Geometry Dash/TSL"
 
-# --- Options -----------------------------------------------------------------
-# Listes à suivre (noms utilisés dans https://tsl.pages.dev/list/<nom>)
+# --- Options ------------------------------------------------------------------
+# Lists to follow (names used in https://tsl.pages.dev/list/<name>)
 LISTS="tsl tslplus"
-# Copie locale des fichiers et de l'état
+# Local copy of the files and of the state
 DATA_DIR="/var/lib/tsl-sync"
-# Pause entre deux requêtes aux serveurs Geometry Dash (secondes) — évite le blocage
+# Pause between two requests to the Geometry Dash servers (seconds) — avoids being blocked
 DELAY=3
-# 1 = tout envoyer dans Nextcloud à la fin du passage (par défaut) ; 0 = au fur et à mesure
+# 1 = upload everything to Nextcloud at the end of the run (default); 0 = as we go
 UPLOAD_AT_END=1
-# 1 = créer chaque jour un dossier AAAA-MM-JJ dans Nextcloud avec les niveaux nouveaux/modifiés ce jour-là
+# 1 = create a YYYY-MM-DD folder in Nextcloud every day with the levels new/changed that day
 DAILY=1
 
 # --- Discord ------------------------------------------------------------------
-# Bot (recommandé) : annonces + commandes /niveau /changements /liste /statut /verifier
+# Bot (recommended): announcements + /level /changes /list /status /check commands
 #   1. https://discord.com/developers/applications > New Application > Bot > Reset Token
-#   2. OAuth2 > URL Generator : cocher "bot" + "applications.commands",
-#      permissions "Send Messages", "Embed Links", "Attach Files" > ouvrir le lien pour l'inviter
-#   3. Discord > Paramètres > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant
+#   2. OAuth2 > URL Generator: tick "bot" + "applications.commands",
+#      permissions "Send Messages", "Embed Links", "Attach Files" > open the link to invite it
+#   3. Discord > Settings > Advanced > Developer Mode, then right-click the channel > Copy Channel ID
 DISCORD_BOT_TOKEN=""
 DISCORD_CHANNEL_ID=""
-# (optionnel) identifiant de ton serveur Discord : les commandes apparaissent immédiatement
+# (optional) ID of your Discord server: commands show up immediately
 DISCORD_GUILD_ID=""
-# Alternative sans bot : URL d'un webhook Discord (annonces seulement)
+# Alternative without a bot: Discord webhook URL (announcements only)
 DISCORD_WEBHOOK=""
-# 1 = publier aussi un message quand rien n'a changé
+# 1 = also post a message when nothing changed
 DISCORD_ALWAYS=0

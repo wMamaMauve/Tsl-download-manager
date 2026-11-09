@@ -1,7 +1,7 @@
-# Extrait les niveaux d'une page tsl.pages.dev (payload Nuxt "__NUXT_DATA__").
-# Entrée : le contenu JSON du payload (un tableau JSON où les objets référencent
-# leurs valeurs par index). Sortie TSV : position <TAB> id <TAB> nom <TAB> auteur
-# Compatible mawk / gawk / busybox awk.
+# Extracts the levels of a tsl.pages.dev page (Nuxt "__NUXT_DATA__" payload).
+# Input: the JSON content of the payload (a JSON array whose objects reference
+# their values by index). TSV output: position <TAB> id <TAB> name <TAB> author
+# Works with mawk / gawk / busybox awk.
 
 function hexval(h,   i, c, v) {
     v = 0; h = tolower(h)
@@ -14,7 +14,7 @@ function utf8(cp) {
     if (cp < 65536) return sprintf("%c%c%c", 224 + int(cp / 4096), 128 + int(cp / 64) % 64, 128 + cp % 64)
     return sprintf("%c%c%c%c", 240 + int(cp / 262144), 128 + int(cp / 4096) % 64, 128 + int(cp / 64) % 64, 128 + cp % 64)
 }
-# Décode une chaîne JSON (avec ses guillemets) ; renvoie "" si ce n'est pas une chaîne.
+# Decodes a JSON string (with its quotes); returns the value unchanged if it is not a string.
 function jstr(s,   out, i, c, n, cp, lo) {
     if (substr(s, 1, 1) != "\"") return s
     s = substr(s, 2, length(s) - 2); out = ""; n = length(s)
