@@ -100,8 +100,10 @@ def load_index():
                 continue
             pos, lid, name, author, rel = row[:5]
             video = row[5] if len(row) > 5 and row[5].startswith("http") else ""
+            showcase = row[6] if len(row) > 6 and row[6].startswith("http") else ""
             levels.append({"list": lst, "position": int(pos) if pos.isdigit() else 0,
-                           "id": lid, "name": name, "author": author, "file": rel, "video": video})
+                           "id": lid, "name": name, "author": author, "file": rel,
+                           "video": video, "showcase": showcase, "has_videos": len(row) > 6})
     return levels
 
 
@@ -334,12 +336,14 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="ID", value=lv["id"], inline=True)
     embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
                     inline=True)
-    if not lv["video"]:   # index written before videos were recorded: ask the list site
+    if not lv["has_videos"]:   # index written before videos were recorded: ask the list site
         await interaction.response.defer(thinking=True)   # the site may take a few seconds
-        lv["video"] = await asyncio.to_thread(video_from_site, lv["list"], lv["id"])
-    yt = youtube_id(lv["video"])
+        lv["video"], lv["showcase"] = await asyncio.to_thread(videos_from_site, lv["list"], lv["id"])
     if lv["video"]:
         embed.add_field(name="Verification", value=f"[Watch the verification video]({lv['video']})", inline=False)
+    if lv["showcase"]:
+        embed.add_field(name="Showcase", value=f"[Watch the showcase video]({lv['showcase']})", inline=False)
+    yt = youtube_id(lv["video"]) or youtube_id(lv["showcase"])
     if yt:   # the video's thumbnail, inside the embed (bots cannot put a video player in an embed)
         embed.set_image(url=f"https://i.ytimg.com/vi/{yt}/hqdefault.jpg")
     else:
@@ -354,11 +358,6 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     else:
         note = "_(.gmd file too large for Discord, see Nextcloud)_" if path and path.is_file() else None
         await send(content=note, embed=embed)
-    # The video is sent as a separate message containing only its URL: Discord always
-    # shows the YouTube player for such a message (it may not when the URL sits next to
-    # a bot embed).
-    if lv["video"]:
-        await interaction.followup.send(lv["video"])
 
 
 def youtube_id(url):
@@ -369,8 +368,19 @@ def youtube_id(url):
 _SITE_CACHE = {}   # list -> (time, {level id: video url})
 
 
-def video_from_site(lst, level_id):
-    """Verification video of a level, read from the list site (cached 1 hour). '' if unknown."""
+def clean_url(url):
+    """Cleans up a video URL typed by hand on the site; '' if it is not a URL."""
+    url = (url or "").strip() if isinstance(url, str) else ""
+    if url.startswith("ttp"):
+        url = "h" + url
+    if re.match(r"^(www\.|m\.)?(youtube\.com|youtu\.be)/", url):
+        url = "https://" + url
+    url = url.replace("://www.youtu.be/", "://youtu.be/")
+    return url if re.match(r"^https?://\S+$", url) else ""
+
+
+def videos_from_site(lst, level_id):
+    """(verification, showcase) video URLs of a level, read from the list site (cached 1 hour)."""
     cached = _SITE_CACHE.get(lst)
     if not cached or time.time() - cached[0] > 3600:
         videos = {}
@@ -382,20 +392,13 @@ def video_from_site(lst, level_id):
             # Nuxt payload: objects reference their values by index in the top-level array
             for obj in data:
                 if isinstance(obj, dict) and "verification" in obj and "id" in obj:
-                    lid, url = data[obj["id"]], data[obj["verification"]]
-                    if isinstance(url, str):
-                        url = url.strip()
-                        if url.startswith("ttp"):
-                            url = "h" + url
-                        if re.match(r"^(www\.)?(youtube\.com|youtu\.be)/", url):
-                            url = "https://" + url
-                        videos[str(lid)] = url.replace("://www.youtu.be/", "://youtu.be/")
+                    videos[str(data[obj["id"]])] = (clean_url(data[obj["verification"]]),
+                                                    clean_url(data[obj["showcase"]]) if "showcase" in obj else "")
         except Exception:
             log.exception("could not read the videos from %s/%s", LIST_BASE_URL, lst)
         _SITE_CACHE[lst] = (time.time(), videos)
         cached = _SITE_CACHE[lst]
-    url = cached[1].get(str(level_id), "")
-    return url if url.startswith("http") else ""
+    return cached[1].get(str(level_id), ("", ""))
 
 
 def level_diffs(level_id):

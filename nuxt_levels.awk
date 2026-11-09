@@ -1,7 +1,8 @@
 # Extracts the levels of a tsl.pages.dev page (Nuxt "__NUXT_DATA__" payload).
 # Input: the JSON content of the payload (a JSON array whose objects reference
-# their values by index). TSV output: position <TAB> id <TAB> name <TAB> author <TAB> video
-# (video = URL of the verification video, or of the showcase, or empty)
+# their values by index).
+# TSV output: position <TAB> id <TAB> name <TAB> author <TAB> verification video <TAB> showcase video
+# (a missing video is written "-")
 # Works with mawk / gawk / busybox awk.
 
 function hexval(h,   i, c, v) {
@@ -42,6 +43,7 @@ function fixurl(u) {
     gsub(/^[ \t]+|[ \t]+$/, "", u)
     if (u ~ /^ttps?:\/\//) u = "h" u
     if (u ~ /^(www\.|m\.)?(youtube\.com|youtu\.be)\//) u = "https://" u
+    sub(/^https?:\/\/www\.youtu\.be\//, "https://youtu.be/", u)
     return (u ~ /^https?:\/\/[^ ]+$/) ? u : ""
 }
 { buf = buf $0 }
@@ -86,8 +88,9 @@ END {
         pos = ("position" in f) ? el[f["position"]] : count
         if (pos !~ /^[0-9]+$/) pos = count
         video = ("verification" in f) ? fixurl(jstr(el[f["verification"]])) : ""
-        if (video == "" && ("showcase" in f)) video = fixurl(jstr(el[f["showcase"]]))
-        sub(/^https?:\/\/www\.youtu\.be\//, "https://youtu.be/", video)
-        printf "%s\t%s\t%s\t%s\t%s\n", pos, id, jstr(el[f["name"]]), jstr(el[f["author"]]), video
+        showcase = ("showcase" in f) ? fixurl(jstr(el[f["showcase"]])) : ""
+        # "-" for a missing video: read with IFS=tab would merge consecutive tabs
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", pos, id, jstr(el[f["name"]]), jstr(el[f["author"]]), \
+            (video == "" ? "-" : video), (showcase == "" ? "-" : showcase)
     }
 }

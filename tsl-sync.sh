@@ -352,7 +352,7 @@ for lst in $LISTS; do
         [ "${moved:-0}" -gt 0 ] && notify "[$lst] $moved level(s) moved in the ranking"
     fi
 
-    while IFS=$'\t' read -r pos id name author _video; do
+    while IFS=$'\t' read -r pos id name author _video _showcase; do
         [ -n "${WANT_LIST[$id]:-}" ] && continue   # already in a previous list
         WANT_LIST[$id]="$lst"; WANT_POS[$id]="$pos"; WANT_NAME[$id]="$name"; WANT_AUTHOR[$id]="$author"
         ORDER+=("$id")
@@ -492,9 +492,10 @@ save_state
 # ---------------------------------------------------------------- 3. index + log
 for lst in $LISTS; do
     mkdir -p "$FILES/$lst"
-    { printf 'position\tid\tname\tauthor\tfile\tvideo\n'
-      while IFS=$'\t' read -r pos id name author video; do
-          printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pos" "$id" "$name" "$author" "${ST_FILE[$id]:-(not downloaded)}" "${video:-}"
+    { printf 'position\tid\tname\tauthor\tfile\tvideo\tshowcase\n'
+      while IFS=$'\t' read -r pos id name author video showcase; do
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pos" "$id" "$name" "$author" "${ST_FILE[$id]:-(not downloaded)}" \
+              "${video:--}" "${showcase:--}"
       done < "$TMP/$lst.tsv"; } > "$FILES/$lst/index.tsv"
     nc_put "$lst/index.tsv"
 done
