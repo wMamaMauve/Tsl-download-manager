@@ -183,22 +183,42 @@ def current_progress():
 
 
 IDLE_ROTATE = 30 * 60   # seconds before the idle activity shows another random level
-_IDLE = {"text": "", "until": 0.0}
+# Shown at least once a day each, at a random time of the day, for one IDLE_ROTATE period.
+DAILY_ACTIVITIES = [("watching", "Dylan"), ("playing", "Evo")]
+_IDLE = {"activity": None, "until": 0.0, "day": None, "plan": {}, "shown": set()}
 
 
-def idle_activity_text():
-    """'Shitty NETWORK on TSL': a random level of any list, changed every IDLE_ROTATE seconds (30 min)."""
-    if _IDLE["text"] and time.time() < _IDLE["until"]:
-        return _IDLE["text"]
+def daily_plan(day):
+    """Random time (seconds after midnight) of each daily activity, different every day."""
+    rng = random.Random(day.isoformat())
+    slots = rng.sample(range(86400 // IDLE_ROTATE), len(DAILY_ACTIVITIES))
+    return {act: slot * IDLE_ROTATE for act, slot in zip(DAILY_ACTIVITIES, slots)}
+
+
+def idle_activity():
+    """(kind, text) for the bot's status when no run is in progress: a random level of any list
+    ('watching', 'Shitty NETWORK on TSL'), changed every IDLE_ROTATE seconds, and once a day each
+    of DAILY_ACTIVITIES (shown as soon as possible after its time if a run was going on then)."""
+    now = dt.datetime.now()
+    if _IDLE["day"] != now.date():
+        _IDLE.update(day=now.date(), plan=daily_plan(now.date()), shown=set())
+    since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+    due = [act for act, at in _IDLE["plan"].items() if at <= since_midnight and act not in _IDLE["shown"]]
+    if due and (_IDLE["activity"] not in DAILY_ACTIVITIES or time.time() >= _IDLE["until"]):
+        _IDLE["shown"].add(due[0])
+        _IDLE.update(activity=due[0], until=time.time() + IDLE_ROTATE)
+        return due[0]
+    if _IDLE["activity"] and time.time() < _IDLE["until"]:
+        return _IDLE["activity"]
     levels = load_index()
     if levels:
         lv = random.choice(levels)
         label = {"tsl": "TSL", "tslplus": "TSL+"}.get(lv["list"], lv["list"])
-        _IDLE["text"] = f"{lv['name']} on {label}"[:128]
+        _IDLE["activity"] = ("watching", f"{lv['name']} on {label}"[:128])
     else:
-        _IDLE["text"] = "The Shitty List"
+        _IDLE["activity"] = ("watching", "The Shitty List")
     _IDLE["until"] = time.time() + IDLE_ROTATE
-    return _IDLE["text"]
+    return _IDLE["activity"]
 
 
 def discord_time(text, style="f"):
@@ -283,8 +303,9 @@ class TSLBot(discord.Client):
         if step:
             text, activity = step[:128], discord.CustomActivity(name=step[:128])
         else:
-            text = idle_activity_text()
-            activity = discord.Activity(type=discord.ActivityType.watching, name=text)
+            kind, name = idle_activity()
+            text = f"{kind}:{name}"
+            activity = discord.Activity(type=getattr(discord.ActivityType, kind), name=name)
         if text != self.presence:
             await self.change_presence(activity=activity)
             self.presence = text
