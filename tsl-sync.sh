@@ -163,9 +163,10 @@ for lst in $LISTS; do
 done
 
 # ---------------------------------------------------------------- 2. versions (par lots de 10)
-if [ "$FORCE" != 1 ]; then
-    log "Vérification des versions sur les serveurs GD (${#ORDER[@]} niveaux)"
+if [ "$FORCE" != 1 ] && [ "${#ST_VER[@]}" -gt 0 ]; then   # inutile au tout premier passage
+    log "Vérification des versions sur les serveurs GD (${#ORDER[@]} niveaux, ~$(( (${#ORDER[@]} + 9) / 10 * (DELAY + 1) / 60 + 1 )) min)"
     for ((i = 0; i < ${#ORDER[@]}; i += 10)); do
+        [ $((i % 100)) -eq 0 ] && [ "$i" -gt 0 ] && log "  $i / ${#ORDER[@]}"
         batch="$(IFS=,; echo "${ORDER[*]:i:10}")"
         resp="$(gd_post getGJLevels21.php "type=10&str=$batch")" || continue
         [ "${resp:0:2}" = "-1" ] && continue
@@ -196,7 +197,7 @@ make_gmd() {  # make_gmd <réponse brute> <nom> <auteur> <fichier>
     }' > "$out"
 }
 
-new=0; updated=0; same=0; failed=0
+new=0; updated=0; same=0; failed=0; n_done=0
 for id in "${ORDER[@]}"; do
     lst="${WANT_LIST[$id]}"; name="${WANT_NAME[$id]}"; author="${WANT_AUTHOR[$id]}"
     rel="$lst/$(safe_name "$name") ($id).gmd"
@@ -213,7 +214,8 @@ for id in "${ORDER[@]}"; do
         same=$((same + 1)); continue
     fi
 
-    log "Téléchargement $name ($id)"
+    n_done=$((n_done + 1))
+    log "Téléchargement [$n_done] $name ($id)"
     resp="$(gd_post downloadGJLevel22.php "levelID=$id")" || { failed=$((failed + 1)); continue; }
     if [ "${resp:0:2}" = "-1" ] || [ "${resp:0:2}" != "1:" ]; then
         log "  niveau introuvable sur les serveurs GD (supprimé ou privé ?)"; failed=$((failed + 1)); continue
