@@ -666,7 +666,7 @@ async def cmd_status(interaction: discord.Interaction):
     state = load_state()
     index = load_index()
 
-    embed = discord.Embed(title="TSL status", colour=EMBED_COLOUR)
+    embed = discord.Embed(title="Server & Tracking status", colour=EMBED_COLOUR)
     embed.add_field(name="Current run", value=step or "✅ Idle", inline=False)
     if when:
         embed.add_field(name="Last run", value=when, inline=False)
