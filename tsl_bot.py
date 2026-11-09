@@ -1094,6 +1094,72 @@ async def show_duplicates(interaction, query):
     await view.send(interaction)
 
 
+def video_key(link):
+    """Same rule as video_duplicates.awk: 'youtube:<id>' for YouTube, else the link without query."""
+    link = (link or "").strip()
+    yt = youtube_id(link)
+    if yt:
+        return f"youtube:{yt}"
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", link):   # a bare YouTube ID
+        return f"youtube:{link}"
+    k = re.sub(r"[?#].*", "", link.lower()).rstrip("/")
+    return re.sub(r"^https?://(www\.|m\.)?", "", k)
+
+
+def latest_video_log():
+    """Rows (dicts) of the newest records-log/*.tsv written by tsl-sync.sh, or None."""
+    logs = sorted((files_dir() / "records-log").glob("*.tsv"))
+    if not logs:
+        return None
+    rows = read_tsv(logs[-1])
+    if not rows:
+        return None
+    header = rows[0]
+    return [dict(zip(header, row)) for row in rows[1:] if len(row) >= len(header)], logs[-1].stem
+
+
+@bot.tree.command(name="video", description="Find which levels and players use a video (paste its link)")
+@app_commands.describe(link="Link of the video (YouTube, Medal, Drive…) or a YouTube video ID")
+async def cmd_video(interaction: discord.Interaction, link: str):
+    found = latest_video_log()
+    if found is None:
+        await interaction.response.send_message("The videos have not been checked yet: they are listed after "
+                                                "the next run.", ephemeral=True)
+        return
+    rows, when = found
+    key = video_key(link)
+    matches = [r for r in rows if video_key(r["link"]) == key]
+    if not matches:
+        await interaction.response.send_message(f"This video is not used on the list site: <{link.strip()}>")
+        return
+    positions = {(lv["list"], lv["id"]): lv["position"] for lv in load_index()}
+    first = matches[0]
+    embed = discord.Embed(title="Video search", url=first["link"] if first["link"].startswith("http") else None,
+                          colour=list_colour(first["list"]),
+                          description=f"<{first['link']}>\nUsed **{len(matches)}** time{'s' if len(matches) > 1 else ''} "
+                                      "on the list site.")
+    result = first.get("result", "?")
+    checked = first.get("checked", "-")
+    embed.add_field(name="Status", value=f"{result[:1].upper()}{result[1:]}"
+                                         + (f" (checked {checked})" if checked not in ("-", "") else ""), inline=False)
+    duplicate = next((r["duplicate"] for r in matches if r.get("duplicate", "-") != "-"), None)
+    if duplicate:
+        embed.add_field(name="Duplicate", value=f"⚠️ {duplicate[:1].upper()}{duplicate[1:]}", inline=False)
+    for r in matches[:20]:
+        pos = positions.get((r["list"], r["level id"]))
+        where = f"{LIST_NAMES.get(r['list'], r['list'])}{f' #{pos}' if pos else ''}"
+        player = "" if r["player"] == "-" else r["player"]
+        embed.add_field(name=video_label(r["video"], player)[:256], inline=False,
+                        value=f"[{r['level']}]({LIST_BASE_URL}/{r['list']}?level={r['level id']}) by {r['creator']}"
+                              f" · {where}"[:1024])
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\d)_(\d\d)(\d\d)", when)
+    footer = f"From the check of {m.group(1)} {m.group(2)}:{m.group(3)}" if m else f"From the check {when}"
+    if len(matches) > 20:
+        footer = f"… and {len(matches) - 20} more · " + footer
+    embed.set_footer(text=footer)
+    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
 @bot.tree.command(name="records", description="Record videos that can no longer be watched, or that are used twice")
 @app_commands.describe(query="Only this level (name, creator or ID)", show="What to list (default: unavailable videos)")
 @app_commands.autocomplete(query=level_autocomplete)
