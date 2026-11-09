@@ -587,11 +587,32 @@ def parse_summary(summary):
     return info
 
 
+_OBJECT_NAMES = None
+
+
+def object_name(object_id):
+    """Readable name of an object ID from object_names.tsv (None if unknown)."""
+    global _OBJECT_NAMES
+    if _OBJECT_NAMES is None:
+        _OBJECT_NAMES = {}
+        try:
+            for line in DIFF_TOOL.with_name("object_names.tsv").read_text(encoding="utf-8").splitlines():
+                oid, _, name = line.partition("\t")
+                if oid.isdigit() and name:
+                    _OBJECT_NAMES[oid] = name
+        except OSError:
+            pass
+    return _OBJECT_NAMES.get(str(object_id))
+
+
 def type_lines(items):
-    """['9303 object #516', '4334 blocks'] -> '9,303 × object #516\n4,334 × blocks'"""
+    """['9303 object #516', '4334 blocks'] -> '9,303 × 3D outline (#516)\n4,334 × blocks'"""
     out = []
     for item in items:
         count, _, name = item.partition(" ")
+        known = re.fullmatch(r"object #(\d+)", name)
+        if known and object_name(known.group(1)):   # diffs saved before the names table existed
+            name = f"{object_name(known.group(1))} (#{known.group(1)})"
         out.append(f"{num(count)} × {name}" if count.isdigit() else item)
     return "\n".join(out)[:1024] or "—"
 

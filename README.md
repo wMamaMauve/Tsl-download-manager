@@ -84,6 +84,8 @@ Example of a Discord announcement:
 - Settings changed: start speed
 ```
 
+Object names (3D outline, glow block, gradient, shader trigger…) come from `object_names.tsv`, a table of all ~4,100 object IDs built from the GD 2.208 editor sprite list ([StarryDawn72/open-source-gd-project](https://github.com/StarryDawn72/open-source-gd-project)); an ID missing from it is shown as `object #ID`.
+
 An object is counted as *moved* when an identical object (same properties except its position) was removed close by (less than 20 blocks away); otherwise it counts as one removal and one addition. You can also compare two files by hand: `/opt/tsl-sync/level_diff.sh old.gmd new.gmd details.txt`.
 
 Log example:

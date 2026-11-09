@@ -18,6 +18,8 @@ export LC_ALL=C
 
 OLD="$1"; NEW="$2"; DETAIL="${3:-}"
 T="$(mktemp -d)"
+NAMES="${OBJECT_NAMES:-$(dirname "$0")/object_names.tsv}"   # ID -> readable name table
+[ -r "$NAMES" ] || NAMES=/dev/null
 trap 'rm -rf "$T"' EXIT
 
 # --- decoding ---------------------------------------------------------------
@@ -124,7 +126,8 @@ if [ $((n_add + n_rem + n_mov)) -gt 0 ] && [ "${max_x%.*}" -gt 0 ]; then
 fi
 
 # --- object names -----------------------------------------------------------
-# Common object IDs; anything else is shown as "object #ID".
+# Hand-picked names for common IDs, then object_names.tsv for everything else;
+# an ID found in neither is shown as "object #ID".
 type_summary() {  # type_summary <A|R|M>  ->  "80 blocks, 30 spikes, 14 move triggers"
     awk -F'\t' -v T="$1" '
     BEGIN {
@@ -153,9 +156,10 @@ type_summary() {  # type_summary <A|R|M>  ->  "80 blocks, 30 spikes, 14 move tri
         name[142] = "secret coin"; name[1329] = "user coin"; name[31] = "start position"
         name[914] = "text"
     }
+    FILENAME != ARGV[2] { if ($1 ~ /^[0-9]+$/ && !($1 in name)) name[$1] = $2; next }
     $1 == T { n = ($2 in name) ? name[$2] : "object #" $2; c[n]++ }
-    END { for (n in c) printf "%d\t%s\n", c[n], n }' "$T/changes" | sort -t"$(printf '\t')" -k1,1nr -k2 | head -4 |
-    awk -F'\t' '{ n = $2; if ($1 > 1 && n !~ /^object #/) n = n "s"; printf "%s%d %s", (NR > 1 ? ", " : ""), $1, n }'
+    END { for (n in c) printf "%d\t%s\n", c[n], n }' "$NAMES" "$T/changes" | sort -t"$(printf '\t')" -k1,1nr -k2 | head -4 |
+    awk -F'\t' '{ n = $2; if ($1 > 1 && n !~ /^object #|(deco|art|s)$/) n = n "s"; printf "%s%d %s", (NR > 1 ? ", " : ""), $1, n }'
 }
 
 # --- level settings (header) ------------------------------------------------
