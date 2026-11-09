@@ -21,10 +21,16 @@ import json
 import subprocess
 import time
 import urllib.request
+import io
 from pathlib import Path
 
 import discord
 from discord import app_commands
+
+try:   # optional: pictures of the changed objects in /diff
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = None
 
 log = logging.getLogger("tsl-bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -551,11 +557,10 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
         return
 
     view = DiffView(lv, diffs, interaction.user.id)
-    embed, file = view.render()
+    embed, files = view.render()
     kwargs = {"embed": embed, "view": view} if len(diffs) > 1 else {"embed": embed}
-    if file:
-        kwargs["file"] = file
-    else:
+    kwargs["files"] = files
+    if not any(f.filename.endswith(".txt") for f in files):
         kwargs["content"] = "_(full list too large for Discord, see Nextcloud)_"
     view.message = await send(wait=True, **kwargs)
 
@@ -617,8 +622,83 @@ def type_lines(items):
     return "\n".join(out)[:1024] or "—"
 
 
+SPRITES_DIR = Path(setting("SPRITES_DIR", str(DATA_DIR / "objects")))   # made by extract_sprites.py
+_IMAGE_CACHE = {}
+
+
+def _font(size):
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def objects_image(path, sections):
+    """PNG (bytes) showing the most added / removed / moved objects with their count, or None."""
+    if Image is None or not SPRITES_DIR.is_dir():
+        return None
+    key = (str(path), path.stat().st_mtime)
+    if key in _IMAGE_CACHE:
+        return _IMAGE_CACHE[key]
+    rows = []
+    for section, title in (("ADDED", "Added"), ("REMOVED", "Removed"), ("MOVED", "Moved")):
+        counts = {}
+        for line in sections.get(section, []):
+            m = re.search(r"\bid (\d+)\b", line)
+            if m:
+                counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+        top = sorted(counts.items(), key=lambda kv: (-kv[1], int(kv[0])))[:6]
+        if top:
+            rows.append((title, top))
+    if not any((SPRITES_DIR / f"{oid}.png").exists() for _, top in rows for oid, _ in top):
+        _IMAGE_CACHE[key] = None
+        return None
+    cell_w, icon, pad, title_h = 130, 72, 14, 30
+    row_h = title_h + icon + 58
+    img = Image.new("RGBA", (pad * 2 + cell_w * 6, pad + row_h * len(rows)), (43, 45, 49, 255))
+    draw = ImageDraw.Draw(img)
+    f_title, f_count, f_name = _font(20), _font(17), _font(13)
+    y = pad
+    for title, top in rows:
+        draw.text((pad, y), title, font=f_title, fill=(255, 255, 255))
+        for i, (oid, count) in enumerate(top):
+            x = pad + i * cell_w
+            box = (x + (cell_w - icon) // 2, y + title_h)
+            draw.rounded_rectangle((box[0] - 4, box[1] - 4, box[0] + icon + 4, box[1] + icon + 4),
+                                   radius=8, fill=(30, 31, 34))
+            sprite = SPRITES_DIR / f"{oid}.png"
+            if sprite.exists():
+                try:
+                    pic = Image.open(sprite).convert("RGBA")
+                    pic.thumbnail((icon, icon))
+                    img.alpha_composite(pic, (box[0] + (icon - pic.width) // 2, box[1] + (icon - pic.height) // 2))
+                except OSError:
+                    pass
+            else:
+                draw.text((box[0] + icon // 2, box[1] + icon // 2), "?", font=f_title, fill=(150, 150, 150),
+                          anchor="mm")
+            cx, ty = x + cell_w // 2, box[1] + icon + 8
+            draw.text((cx, ty), f"× {count:,}", font=f_count, fill=(255, 255, 255), anchor="mt")
+            name = object_name(oid) or "object"
+            name = name if len(name) <= 18 else name[:17] + "…"
+            draw.text((cx, ty + 22), name, font=f_name, fill=(200, 200, 200), anchor="mt")
+            draw.text((cx, ty + 38), f"#{oid}", font=f_name, fill=(140, 140, 140), anchor="mt")
+        y += row_h
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    if len(_IMAGE_CACHE) > 50:
+        _IMAGE_CACHE.clear()
+    _IMAGE_CACHE[key] = buf.getvalue()
+    return _IMAGE_CACHE[key]
+
+
 def diff_embed(lv, path, index, total):
-    """Embed and attachment for one diff file of a level (index 0 = newest)."""
+    """Embed and attachments for one diff file of a level (index 0 = newest)."""
     summary, sections = parse_diff(path)
     url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
     info = parse_summary(summary)
@@ -653,11 +733,15 @@ def diff_embed(lv, path, index, total):
     where = "" if total == 1 else (" (newest)" if index == 0 else (" (oldest)" if index == total - 1 else ""))
     embed.set_footer(text=f"Change {index + 1}/{total}{where} · "
                           "the attached file lists every added, removed and moved object")
-    file = None
+    files = []
+    picture = objects_image(path, sections)
+    if picture:
+        files.append(discord.File(io.BytesIO(picture), filename="objects.png"))
+        embed.set_image(url="attachment://objects.png")
     if path.stat().st_size <= UPLOAD_MAX:
         filename = re.sub(r'[\\/:*?"<>|]', "_", f"{lv['name']} - changes {path.name[:10]}.txt")
-        file = discord.File(path, filename=filename)
-    return embed, file
+        files.append(discord.File(path, filename=filename))
+    return embed, files
 
 
 class DiffView(discord.ui.View):
@@ -687,10 +771,11 @@ class DiffView(discord.ui.View):
     async def show(self, interaction, index):
         self.index = min(max(index, 0), len(self.diffs) - 1)
         self.refresh_buttons()
-        embed, file = self.render()
+        embed, files = self.render()
+        too_big = not any(f.filename.endswith(".txt") for f in files)
         await interaction.response.edit_message(
-            embed=embed, view=self, attachments=[file] if file else [],
-            content=None if file else "_(full list too large for Discord, see Nextcloud)_")
+            embed=embed, view=self, attachments=files,
+            content="_(full list too large for Discord, see Nextcloud)_" if too_big else None)
 
     @discord.ui.button(label="Newest", style=discord.ButtonStyle.secondary)
     async def newest(self, interaction, _button):

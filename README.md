@@ -60,6 +60,15 @@ The bot posts everything that changes to a channel (level modified, info changed
 | `/status` | result of the last run |
 | `/run` | (admins) start a tracking run now: re-downloads every level and looks for changes (~35 min) |
 
+### Pictures of the changed objects in `/diff`
+
+`/diff` can show a picture of the objects that were added, removed or moved, with their count. The pictures are cut out of **your own copy of the game** (they are RobTop's art, so they are not in this repository):
+
+1. copy the game's `Resources` folder to the server (Steam: `steamapps/common/Geometry Dash/Resources`; only `GJ_GameSheet*` and the other `*Sheet*` `.png` + `.plist` files are needed), e.g. to `/var/lib/tsl-sync/gd-resources/`;
+2. `/opt/tsl-sync/venv/bin/python /opt/tsl-sync/extract_sprites.py /var/lib/tsl-sync/gd-resources` — saves one `<id>.png` per object in `/var/lib/tsl-sync/objects/` (another folder: `SPRITES_DIR` in the config).
+
+Run it again after a game update. Without these pictures, `/diff` works as before.
+
 Setup: `./install-bot.sh` (installs Python and discord.py), then fill in `DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID` in `/etc/tsl-sync.conf` (the steps are explained in the file) and run `systemctl restart tsl-bot`. Log: `journalctl -u tsl-bot -f`.
 
 ## Change detection

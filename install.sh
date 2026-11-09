@@ -10,6 +10,8 @@ install -m 755 "$SRC/tsl-sync.sh" /opt/tsl-sync/tsl-sync.sh
 install -m 644 "$SRC/nuxt_levels.awk" /opt/tsl-sync/nuxt_levels.awk
 install -m 755 "$SRC/level_diff.sh" /opt/tsl-sync/level_diff.sh
 install -m 644 "$SRC/object_names.tsv" /opt/tsl-sync/object_names.tsv
+install -m 644 "$SRC/object_frames.tsv" /opt/tsl-sync/object_frames.tsv
+install -m 755 "$SRC/extract_sprites.py" /opt/tsl-sync/extract_sprites.py
 if [ ! -f /etc/tsl-sync.conf ]; then
     install -m 600 "$SRC/tsl-sync.conf.example" /etc/tsl-sync.conf
     echo ">> Config created: /etc/tsl-sync.conf — fill in NC_URL, NC_USER and NC_PASS."
@@ -48,6 +50,7 @@ else
 fi
 if systemctl is-enabled --quiet tsl-bot 2>/dev/null; then
     install -m 755 "$SRC/tsl_bot.py" /opt/tsl-sync/tsl_bot.py
+    /opt/tsl-sync/venv/bin/pip install -q pillow || echo "!! could not install Pillow (object pictures in /diff)"
     systemctl restart tsl-bot && echo ">> Discord bot updated and restarted."
 fi
 echo ">> First manual run: systemctl start --no-block tsl-sync && journalctl -u tsl-sync -f"

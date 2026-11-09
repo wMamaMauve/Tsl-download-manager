@@ -17,11 +17,14 @@ fi
 
 install -d /opt/tsl-sync
 install -m 755 "$SRC/tsl_bot.py" /opt/tsl-sync/tsl_bot.py
+install -m 755 "$SRC/extract_sprites.py" /opt/tsl-sync/extract_sprites.py
+install -m 644 "$SRC/object_frames.tsv" /opt/tsl-sync/object_frames.tsv
+install -m 644 "$SRC/object_names.tsv" /opt/tsl-sync/object_names.tsv
 if [ ! -x /opt/tsl-sync/venv/bin/python ]; then
     python3 -m venv /opt/tsl-sync/venv
 fi
 /opt/tsl-sync/venv/bin/pip install -q --upgrade pip
-/opt/tsl-sync/venv/bin/pip install -q "discord.py==2.5.2"
+/opt/tsl-sync/venv/bin/pip install -q "discord.py==2.5.2" pillow
 
 cat > /etc/systemd/system/tsl-bot.service <<'UNIT'
 [Unit]
