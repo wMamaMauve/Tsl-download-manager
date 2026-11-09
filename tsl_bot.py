@@ -382,6 +382,34 @@ def parse_diff(path):
     return summary, sections
 
 
+DIFF_TOOL = Path(setting("DIFF_TOOL", str(Path(__file__).with_name("level_diff.sh"))))
+
+
+def latest_history_gmd(level_id):
+    """Most recent previous version of a level kept in history/, or None."""
+    paths = []
+    for hist in (files_dir() / "history", files_dir() / "historique"):
+        if hist.is_dir():
+            paths += [p for d in hist.iterdir() if d.is_dir() and d.name.endswith(f"({level_id})")
+                      for p in d.glob("*.gmd")]
+    return max(paths, key=lambda p: (p.name[:10], p.stat().st_mtime)) if paths else None
+
+
+def compute_diff(lv, old_gmd, current):
+    """Runs level_diff.sh between a previous version and the current file; returns the detail file."""
+    version = load_state().get(lv["id"], {}).get("version") or "current"
+    out = old_gmd.with_name(f"{old_gmd.stem}_to_v{version}_diff.txt")
+    env = dict(os.environ, OLD_LABEL=f"{lv['name']} ({lv['id']}) {old_gmd.stem}",
+               NEW_LABEL=f"{lv['name']} ({lv['id']}) current version")
+    try:
+        subprocess.run([str(DIFF_TOOL), str(old_gmd), str(current), str(out)], env=env, timeout=300,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    except (OSError, subprocess.SubprocessError):
+        log.exception("level_diff.sh failed for %s", lv["id"])
+        return None
+    return out if out.is_file() else None
+
+
 def short_object(line):
     """'+ id 1 at x=54077 y=255   [1,1,...]' -> '+ id 1 at x=54077 y=255'"""
     return re.sub(r"\s+\[.*\]$", "", line)
@@ -404,9 +432,19 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
     diffs = level_diffs(lv["id"])
     url = f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}"
     if not diffs:
-        await interaction.response.send_message(
-            f"No recorded changes for **[{lv['name']}](<{url}>)** yet: a comparison is made the next time "
-            "the level is modified.", ephemeral=True)
+        # No comparison recorded (level modified before level_diff.sh existed): compare the
+        # previous version kept in history/ with the current file, now.
+        old_gmd = latest_history_gmd(lv["id"])
+        current = files_dir() / lv["file"] if lv["file"] and not lv["file"].startswith("(") else None
+        if old_gmd and current and current.is_file() and DIFF_TOOL.is_file():
+            await interaction.response.defer(thinking=True)
+            made = await asyncio.to_thread(compute_diff, lv, old_gmd, current)
+            if made:
+                diffs = [made]
+    send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+    if not diffs:
+        await send(f"No recorded changes for **[{lv['name']}](<{url}>)** yet: a comparison is made the next time "
+                   "the level is modified.", ephemeral=True)
         return
 
     latest = diffs[0]
@@ -431,10 +469,9 @@ async def cmd_diff(interaction: discord.Interaction, query: str):
 
     if latest.stat().st_size <= UPLOAD_MAX:
         filename = re.sub(r'[\\/:*?"<>|]', "_", f"{lv['name']} - changes {latest.name[:10]}.txt")
-        await interaction.response.send_message(embed=embed, file=discord.File(latest, filename=filename))
+        await send(embed=embed, file=discord.File(latest, filename=filename))
     else:
-        await interaction.response.send_message(content="_(full list too large for Discord, see Nextcloud)_",
-                                                embed=embed)
+        await send(content="_(full list too large for Discord, see Nextcloud)_", embed=embed)
 
 
 @bot.tree.command(name="changes", description="What changed in the last days")
