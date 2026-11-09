@@ -149,6 +149,15 @@ def split_messages(lines, header=""):
     return messages
 
 
+def strip_versions(line):
+    """Removes version numbers from a log line: 'v1 -> v2', a trailing 'v1', and the
+    '(previous version in history/…)' note (English and old French lines)."""
+    line = re.sub(r"\s*\((?:previous version in|ancienne version dans) .*\)\s*$", "", line)
+    line = re.sub(r"\s+v\d+\s*(?:->|→)\s*v\d+", "", line)
+    line = re.sub(r"\s+v\d+\s*$", "", line)
+    return line
+
+
 def current_progress():
     """Current step of a running tsl-sync (None if no run in progress)."""
     path = DATA_DIR / "progress.txt"
@@ -270,7 +279,7 @@ async def cmd_level(interaction: discord.Interaction, query: str):
         return
     lv = next((x for x in matches if x["id"] == query), matches[0])
     st = load_state().get(lv["id"], {})
-    history = [short_log_line(line) for line in load_log() if f"({lv['id']})" in line][-6:]
+    history = [strip_versions(short_log_line(line)) for line in load_log() if f"({lv['id']})" in line][-6:]
     deleted = st.get("status") == "deleted"
 
     embed = discord.Embed(title=lv["name"], url=f"{LIST_BASE_URL}/{lv['list']}?level={lv['id']}",
@@ -278,7 +287,6 @@ async def cmd_level(interaction: discord.Interaction, query: str):
     embed.add_field(name="Creator", value=lv["author"] or "?", inline=True)
     embed.add_field(name="List", value=f"{LIST_NAMES.get(lv['list'], lv['list'])} — #{lv['position']}", inline=True)
     embed.add_field(name="ID", value=lv["id"], inline=True)
-    embed.add_field(name="Version", value=st.get("version") or "?", inline=True)
     embed.add_field(name="Status", value="Deleted from the GD servers (copy kept)" if deleted else "✅ online",
                     inline=True)
     if lv["video"]:
