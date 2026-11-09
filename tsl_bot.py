@@ -200,7 +200,23 @@ def presence_text():
         return "Waiting for the first run"
     counts = dict((k.strip(), int(v)) for v, k in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", m.group(3)))
     parts = [f"{counts[k]} {k}" for k in ("modified", "info changed", "deleted", "new") if counts.get(k)]
-    return f"✅ Last run {m.group(1)} {m.group(2)} · {', '.join(parts) if parts else 'no changes'}"
+    try:
+        when = time_ago(dt.datetime.strptime(last[:16], "%Y-%m-%d %H:%M"))
+    except ValueError:
+        when = f"{m.group(1)} {m.group(2)}"
+    return f"✅ Last run {when} · {', '.join(parts) if parts else 'no changes'}"
+
+
+def time_ago(moment):
+    """datetime (server local time) -> 'just now', '12 min ago', '3 h ago', '2 days ago'."""
+    minutes = int((dt.datetime.now() - moment).total_seconds() // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} days ago"
 
 
 def discord_time(text, style="f"):
