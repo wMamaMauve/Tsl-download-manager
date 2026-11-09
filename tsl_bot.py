@@ -382,7 +382,7 @@ NO_CHANGES = "✅ No changes were detected."
 def announcement_embeds(lines):
     """Turns a notification file (title line, change lines, '_summary_' line) into embeds.
     The title and summary lines written by tsl-sync.sh are not shown."""
-    body, title = [], ANNOUNCE_TITLE
+    body, title, summary = [], ANNOUNCE_TITLE, ""
     for line in lines:
         line = OLD_EMOJIS.sub("", line.strip())
         if not line:
@@ -393,7 +393,8 @@ def announcement_embeds(lines):
                 title = m.group(1)
             continue   # older files: "**TSL** — run of <date>", shown with the default title
         if line.startswith("_") and line.endswith("_") and len(line) > 2:
-            continue   # summary line ("0 new, 1 modified, ...")
+            summary = line[1:-1]
+            continue   # summary line ("0 new, 1 modified, ..."): only shown for the record videos
         if line in ("✅ No changes.", "No changes.", NO_CHANGES):
             continue
         body.append(re.sub(r"\s*\(v\d+\s*→\s*v\d+\)", "", line))   # old "(v2 → v3)"
@@ -414,6 +415,8 @@ def announcement_embeds(lines):
     for i, chunk in enumerate(chunks):
         name = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
         embeds.append(discord.Embed(title=name[:256], description=chunk, colour=EMBED_COLOUR))
+    if "Records" in title and summary:   # "15681 videos on the site · 3 unavailable (…)"
+        embeds[-1].set_footer(text=re.sub(r"\d{4,}", lambda m: num(m.group(0)), summary)[:2048])
     return embeds
 
 

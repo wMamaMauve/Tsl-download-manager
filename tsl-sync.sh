@@ -542,6 +542,12 @@ if [ "$RECORD_CHECK" = 1 ] && [ -f "$RECORD_TOOL" ]; then
     if bash "$RECORD_TOOL" "$TMP/videos.tsv" "$DATA_DIR/records_state.tsv" "$RECORDS_UNAV" > "$TMP/videos.changes"; then
         VIDEOS_CHECKED=1
         total_videos=$(cut -f6 "$TMP/videos.tsv" | sort -u | wc -l); unav=$(wc -l < "$RECORDS_UNAV")
+        # "2 private, 5 deleted / unavailable" (unique videos)
+        unav_detail=$(awk -F'\t' '!seen[$6]++ { c[$7]++ }
+            END { split("private deleted noaccess invalid", o, " ")
+                  split("private|deleted / unavailable|no access|invalid link", l, "|")
+                  for (i = 1; i <= 4; i++) if (c[o[i]]) printf "%s%d %s", (n++ ? ", " : ""), c[o[i]], l[i] }' "$RECORDS_UNAV")
+        unav=$(cut -f6 "$RECORDS_UNAV" | sort -u | wc -l)
         log "  $total_videos videos, $unav unavailable"
         if grep -qx FIRST "$TMP/videos.changes"; then
             note "VIDEOS: first check, $unav of $total_videos level videos are unavailable"
@@ -606,7 +612,7 @@ fi
 # one announcement for the levels, one for the record videos
 [ "$RUN_MODE" = records ] || discord_send "TSL Levels Tracking result" "$TMP/discord.txt" "$summary" 1
 [ "${VIDEOS_CHECKED:-0}" = 1 ] && discord_send "TSL Records Tracking result" "$TMP/discord_records.txt" \
-    "${total_videos:-0} videos, ${unav:-0} unavailable" 2
+    "${total_videos:-0} videos on the site · ${unav:-0} unavailable${unav_detail:+ ($unav_detail)}" 2
 if [ "$RUN_MODE" != records ]; then   # videos only: /status keeps showing the numbers of the last level run
     printf '%s — %s\n' "$(date '+%Y-%m-%d %H:%M')" "$summary" > "$DATA_DIR/last_run.txt"
     # levels modified during this run: list <TAB> id <TAB> name (shown by the bot's /status)
