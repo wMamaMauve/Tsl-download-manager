@@ -21,3 +21,18 @@ DELAY=3
 UPLOAD_AT_END=1
 # 1 = créer chaque jour un dossier AAAA-MM-JJ dans Nextcloud avec les niveaux nouveaux/modifiés ce jour-là
 DAILY=1
+
+# --- Discord ------------------------------------------------------------------
+# Bot (recommandé) : annonces + commandes /niveau /changements /liste /statut /verifier
+#   1. https://discord.com/developers/applications > New Application > Bot > Reset Token
+#   2. OAuth2 > URL Generator : cocher "bot" + "applications.commands",
+#      permissions "Send Messages", "Embed Links", "Attach Files" > ouvrir le lien pour l'inviter
+#   3. Discord > Paramètres > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant
+DISCORD_BOT_TOKEN=""
+DISCORD_CHANNEL_ID=""
+# (optionnel) identifiant de ton serveur Discord : les commandes apparaissent immédiatement
+DISCORD_GUILD_ID=""
+# Alternative sans bot : URL d'un webhook Discord (annonces seulement)
+DISCORD_WEBHOOK=""
+# 1 = publier aussi un message quand rien n'a changé
+DISCORD_ALWAYS=0

@@ -19,7 +19,6 @@ LIST_BASE_URL="${LIST_BASE_URL:-https://tsl.pages.dev/list}"
 GD_SERVER="${GD_SERVER:-https://www.boomlings.com/database}"
 GD_SECRET="${GD_SECRET:-Wmfd2893gb7}"
 DELAY="${DELAY:-3}"              # pause (secondes) entre deux requêtes aux serveurs GD
-FORCE="${FORCE:-0}"              # 1 = re-télécharger tous les niveaux pour comparer
 NC_URL="${NC_URL:-}"             # ex : https://cloud.exemple.fr  (vide = pas d'envoi)
 NC_USER="${NC_USER:-}"
 NC_PASS="${NC_PASS:-}"           # mot de passe d'application Nextcloud
@@ -112,7 +111,7 @@ nc_mkdirs() {  # crée récursivement le dossier distant <rel>
         [ -n "$part" ] || continue
         acc="${acc:+$acc/}$part"
         [ -n "${NC_DIRS_OK[$acc]:-}" ] && continue
-        code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X MKCOL \
+        code="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X MKCOL \
             "${NC_URL%/}/remote.php/dav/files/$(urlencode "$NC_USER")/$(urlencode "$acc")")" || code=000
         case "$code" in 201|405) NC_DIRS_OK[$acc]=1 ;; *) log "  Nextcloud : impossible de créer $acc (HTTP $code)"; return 1 ;; esac
     done
@@ -122,13 +121,13 @@ nc_put_now() {  # envoie <chemin relatif dans FILES>
     local rel="$1" dir code
     dir="$(dirname "$rel")"; [ "$dir" = "." ] && dir=""
     nc_mkdirs "$dir" || return 1
-    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -T "$FILES/$rel" "$(nc_dav "$rel")")" || code=000
+    code="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -T "$FILES/$rel" "$(nc_dav "$rel")")" || code=000
     case "$code" in 200|201|204) return 0 ;; *) log "  Nextcloud : échec de l'envoi de $rel (HTTP $code)"; return 1 ;; esac
 }
 
 nc_delete_now() {
     local code
-    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X DELETE "$(nc_dav "$1")")" || code=000
+    code="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X DELETE "$(nc_dav "$1")")" || code=000
     case "$code" in 200|204|404) return 0 ;; *) log "  Nextcloud : échec de la suppression de $1 (HTTP $code)"; return 1 ;; esac
 }
 
@@ -136,7 +135,7 @@ nc_copy_now() {  # copie côté serveur Nextcloud <source> -> <destination>, san
     local src="$1" dst="$2" dir code
     dir="$(dirname "$dst")"; [ "$dir" = "." ] && dir=""
     nc_mkdirs "$dir" || return 1
-    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X COPY \
+    code="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' -u "$NC_USER:$NC_PASS" -X COPY \
         -H "Destination: $(nc_dav "$dst")" -H "Overwrite: T" "$(nc_dav "$src")")" || code=000
     case "$code" in 201|204) return 0 ;; *) log "  Nextcloud : échec de la copie de $src vers $dst (HTTP $code)"; return 1 ;; esac
 }
@@ -188,17 +187,79 @@ nc_resync() {  # met en file tous les fichiers locaux (RESYNC=1)
     done >> "$QUEUE"
 }
 
+# ---------------------------------------------------------------- Discord
+DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"   # URL du webhook Discord (vide = pas de notification)
+DISCORD_ALWAYS="${DISCORD_ALWAYS:-0}"    # 1 = envoyer un résumé même s'il n'y a aucun changement
+notify() { printf '%s\n' "$*" >> "$TMP/discord.txt"; }
+
+json_string() {  # échappe un texte pour JSON (stdin -> stdout, avec guillemets)
+    awk 'BEGIN { printf "\"" }
+        { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, " "); gsub(/\r/, "")
+          printf "%s%s", (NR > 1 ? "\\n" : ""), $0 }
+        END { printf "\"" }'
+}
+
+discord_post() {  # discord_post <texte>
+    local code try
+    { printf '{"content":'; printf '%s' "$1" | json_string; printf ',"allowed_mentions":{"parse":[]}}'; } > "$TMP/discord.json"
+    for try in 1 2 3; do
+        code="$(curl -sS -m 120 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -X POST \
+            --data-binary "@$TMP/discord.json" "$DISCORD_WEBHOOK")" || code=000
+        case "$code" in
+            2??) sleep 1; return 0 ;;
+            429) sleep 5 ;;
+            *) log "  Discord : échec de l'envoi (HTTP $code)"; return 1 ;;
+        esac
+    done
+    return 1
+}
+
+DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"  # si défini, les annonces sont publiées par le bot (tsl_bot.py)
+
+bot_queue() {  # dépose les annonces pour le bot Discord
+    [ -n "$DISCORD_BOT_TOKEN" ] || return 0
+    [ -s "$TMP/discord.txt" ] || [ "$DISCORD_ALWAYS" = 1 ] || return 0
+    mkdir -p "$DATA_DIR/notifications"
+    local f="$DATA_DIR/notifications/$(date +%Y%m%d-%H%M%S)-$$"
+    { printf '📋 **TSL** — passage du %s\n' "$(date '+%d/%m/%Y %H:%M')"
+      if [ -s "$TMP/discord.txt" ]; then cat "$TMP/discord.txt"; else echo "✅ Aucun changement."; fi
+      printf '_%s_\n' "$1"; } > "$f.tmp" && mv "$f.tmp" "$f.txt"
+}
+
+discord_send() {  # envoie les notifications accumulées, en messages de moins de 2000 caractères
+    bot_queue "$1"
+    [ -n "$DISCORD_WEBHOOK" ] || return 0
+    local summary="$1" msg line
+    if [ ! -s "$TMP/discord.txt" ]; then
+        [ "$DISCORD_ALWAYS" = 1 ] && discord_post "✅ **TSL** — passage du $(date '+%d/%m/%Y %H:%M') : aucun changement (${summary})"
+        return 0
+    fi
+    msg="📋 **TSL** — passage du $(date '+%d/%m/%Y %H:%M')"
+    while IFS= read -r line; do
+        if [ $(( ${#msg} + ${#line} + 1 )) -gt 1900 ]; then discord_post "$msg"; msg=""; fi
+        msg="${msg:+$msg$'\n'}$line"
+    done < "$TMP/discord.txt"
+    discord_post "$msg"$'\n'"_${summary}_"
+    log "Notifications Discord envoyées"
+}
+
 # ---------------------------------------------------------------- état
-declare -A ST_VER=() ST_SHA=() ST_LIST=() ST_FILE=() GD_VER=()
-while IFS=$'\t' read -r id ver sha lst file; do
+# state.tsv : id  version  sha256(données)  liste  fichier  infos  statut(ok|supprime)
+declare -A ST_VER=() ST_SHA=() ST_LIST=() ST_FILE=() ST_INFO=() ST_STATUS=()
+while IFS=$'\t' read -r id ver sha lst file info status; do
     [ -n "$id" ] || continue
+    [ "$ver" = - ] && ver=""; [ "$sha" = - ] && sha=""; [ "$lst" = - ] && lst=""
+    [ "$file" = - ] && file=""; [ "${info:-}" = - ] && info=""
     ST_VER[$id]="$ver"; ST_SHA[$id]="$sha"; ST_LIST[$id]="$lst"; ST_FILE[$id]="$file"
+    ST_INFO[$id]="${info:-}"; ST_STATUS[$id]="${status:-ok}"
 done < "$STATE"
+FIRST_RUN=0; [ "${#ST_VER[@]}" -eq 0 ] && FIRST_RUN=1
 
 save_state() {
     local id
     for id in "${!ST_VER[@]}"; do
-        printf '%s\t%s\t%s\t%s\t%s\n' "$id" "${ST_VER[$id]}" "${ST_SHA[$id]}" "${ST_LIST[$id]}" "${ST_FILE[$id]}"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "${ST_VER[$id]:--}" "${ST_SHA[$id]:--}" "${ST_LIST[$id]:--}" \
+            "${ST_FILE[$id]:--}" "${ST_INFO[$id]:--}" "${ST_STATUS[$id]:-ok}"
     done | sort -n > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 }
 
@@ -238,6 +299,14 @@ for lst in $LISTS; do
             END { for (i in op) if (!(i in seen)) printf "[%s] SORTIE de la liste : %s (%s), était #%s\n", L, on[i], i, op[i] }
         ' "$old_index" <(printf 'position\tid\tnom\tauteur\n'; cat "$TMP/$lst.tsv") > "$TMP/$lst.moves"
         while IFS= read -r line; do note "$line"; done < "$TMP/$lst.moves"
+        while IFS= read -r line; do
+            case "$line" in
+                *"ENTRÉE dans la liste"*) notify "➕ ${line}" ;;
+                *"SORTIE de la liste"*)   notify "➖ ${line}" ;;
+            esac
+        done < "$TMP/$lst.moves"
+        moved="$(grep -c 'CLASSEMENT' "$TMP/$lst.moves" || true)"
+        [ "${moved:-0}" -gt 0 ] && notify "↕️ [$lst] $moved niveau(x) ont changé de place dans le classement"
     fi
 
     while IFS=$'\t' read -r pos id name author; do
@@ -246,25 +315,6 @@ for lst in $LISTS; do
         ORDER+=("$id")
     done < "$TMP/$lst.tsv"
 done
-
-# ---------------------------------------------------------------- 2. versions (par lots de 10)
-if [ "$FORCE" != 1 ] && [ "${#ST_VER[@]}" -gt 0 ]; then   # inutile au tout premier passage
-    log "Vérification des versions sur les serveurs GD (${#ORDER[@]} niveaux, ~$(( (${#ORDER[@]} + 9) / 10 * (DELAY + 1) / 60 + 1 )) min)"
-    for ((i = 0; i < ${#ORDER[@]}; i += 10)); do
-        [ $((i % 100)) -eq 0 ] && [ "$i" -gt 0 ] && log "  $i / ${#ORDER[@]}"
-        batch="$(IFS=,; echo "${ORDER[*]:i:10}")"
-        rc=0; gd_post getGJLevels21.php "type=10&str=$batch" "$TMP/search" || rc=$?
-        [ "$rc" -eq 2 ] && { GD_BLOCKED=1; break; }
-        [ "$rc" -eq 0 ] || continue
-        [ "$(head -c 2 "$TMP/search")" = "-1" ] && continue
-        # niveaux séparés par "|", avant le premier "#" ; champs clé:valeur ; 1 = id, 5 = version
-        while IFS=$'\t' read -r gid gver; do
-            [ -n "$gid" ] && GD_VER[$gid]="$gver"
-        done < <(cut -d'#' -f1 "$TMP/search" | tr '|' '\n' | awk -F: '{ id = ""; v = "";
-            for (j = 1; j < NF; j += 2) { if ($j == "1") id = $(j + 1); else if ($j == "5") v = $(j + 1) }
-            if (id != "") print id "\t" v }')
-    done
-fi
 
 # ---------------------------------------------------------------- 3. téléchargements
 make_gmd() {  # make_gmd <fichier réponse (partie niveau)> <nom> <auteur> <fichier>
@@ -285,31 +335,50 @@ make_gmd() {  # make_gmd <fichier réponse (partie niveau)> <nom> <auteur> <fich
     }' "$raw" > "$out"
 }
 
-new=0; updated=0; same=0; failed=0; n_done=0
+# Infos comparées en plus du contenu (données du niveau) : champ GD -> libellé
+INFO_FIELDS="2 3 12 35 52 53 15 37 18 19 42 9 17 43 25"
+info_label() {
+    case "$1" in
+        2) echo "nom" ;; 3) echo "description" ;; 12) echo "musique officielle" ;; 35) echo "musique" ;;
+        52) echo "musiques" ;; 53) echo "effets sonores" ;; 15) echo "longueur" ;; 37) echo "pièces" ;;
+        18) echo "étoiles" ;; 19) echo "featured" ;; 42) echo "epic/legendary/mythic" ;;
+        9|17|43|25) echo "difficulté" ;; *) echo "champ $1" ;;
+    esac
+}
+info_diff() {  # info_diff <ancien> <nouveau> -> libellés des champs modifiés, séparés par ", "
+    awk -v A="$1" -v B="$2" 'BEGIN {
+        na = split(A, a, "\037"); nb = split(B, b, "\037")
+        for (i = 1; i <= na; i++) { p = index(a[i], "="); if (p) { k = substr(a[i], 1, p - 1); oa[k] = substr(a[i], p + 1); keys[k] = 1 } }
+        for (i = 1; i <= nb; i++) { p = index(b[i], "="); if (p) { k = substr(b[i], 1, p - 1); ob[k] = substr(b[i], p + 1); keys[k] = 1 } }
+        for (k in keys) if (oa[k] != ob[k]) print k }' | while read -r k; do info_label "$k"; done | sort -u | paste -sd, - | sed 's/,/, /g'
+}
+gdlink() { printf '[%s](<https://gdbrowser.com/%s>)' "$1" "$2"; }
+
+new=0; updated=0; infos=0; same=0; failed=0; deleted=0; n_done=0; total=${#ORDER[@]}
+log "Vérification complète de $total niveaux (contenu téléchargé et comparé)"
 for id in "${ORDER[@]}"; do
     lst="${WANT_LIST[$id]}"; name="${WANT_NAME[$id]}"; author="${WANT_AUTHOR[$id]}"
     rel="$lst/$(safe_name "$name") ($id).gmd"
-
-    # rien à faire si la version n'a pas bougé
-    if [ "$FORCE" != 1 ] && [ -n "${ST_VER[$id]:-}" ] && [ "${GD_VER[$id]:-}" = "${ST_VER[$id]}" ] \
-        && [ -f "$FILES/${ST_FILE[$id]}" ]; then
-        if [ "${ST_FILE[$id]}" != "$rel" ]; then   # renommé ou changé de liste
-            mkdir -p "$FILES/$lst" && mv "$FILES/${ST_FILE[$id]}" "$FILES/$rel"
-            nc_put "$rel" && nc_delete "${ST_FILE[$id]}"
-            note "[$lst] RENOMMÉ : ${ST_FILE[$id]} -> $rel"
-            ST_FILE[$id]="$rel"; ST_LIST[$id]="$lst"
-        fi
-        same=$((same + 1)); continue
-    fi
+    old="${ST_FILE[$id]:-}"
 
     n_done=$((n_done + 1))
-    log "Téléchargement [$n_done] $name ($id)"
+    log "Téléchargement [$n_done/$total] $name ($id)"
     rc=0; gd_post downloadGJLevel22.php "levelID=$id" "$TMP/resp" || rc=$?
     [ "$rc" -eq 2 ] && { GD_BLOCKED=1; failed=$((failed + 1)); break; }
     [ "$rc" -eq 0 ] || { failed=$((failed + 1)); continue; }
+
     if [ "$(head -c 2 "$TMP/resp")" != "1:" ]; then
-        log "  niveau introuvable sur les serveurs GD (supprimé ou privé ?)"; failed=$((failed + 1)); continue
+        # niveau absent des serveurs GD : supprimé ou rendu privé
+        if [ "${ST_STATUS[$id]:-ok}" != supprime ]; then
+            note "[$lst] SUPPRIMÉ des serveurs GD (ou rendu privé) : $name ($id) — la dernière copie est conservée"
+            notify "🗑️ [$lst] **Supprimé** des serveurs GD (ou rendu privé) : $(gdlink "$name" "$id") de $author"
+            ST_STATUS[$id]=supprime; ST_LIST[$id]="$lst"; ST_VER[$id]="${ST_VER[$id]:-}"
+            ST_SHA[$id]="${ST_SHA[$id]:-}"; ST_FILE[$id]="$old"; ST_INFO[$id]="${ST_INFO[$id]:-}"
+            save_state
+        fi
+        deleted=$((deleted + 1)); continue
     fi
+
     cut -d'#' -f1 "$TMP/resp" | tr -d '\r\n' > "$TMP/raw"   # partie niveau (avant le premier #)
     if ! make_gmd "$TMP/raw" "$name" "$author" "$TMP/level.gmd"; then
         log "  réponse invalide, ignoré"; failed=$((failed + 1)); continue
@@ -317,29 +386,49 @@ for id in "${ORDER[@]}"; do
     ver="$(awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "5") print $(j + 1) }' "$TMP/raw")"
     sha="$(awk -F: '{ for (j = 1; j < NF; j += 2) if ($j == "4") printf "%s", $(j + 1) }' "$TMP/raw" \
         | sha256sum | cut -d' ' -f1)"
+    info="$(awk -F: -v F="$INFO_FIELDS" 'BEGIN { n = split(F, w, " ") }
+        { for (j = 1; j < NF; j += 2) f[$j] = $(j + 1) }
+        END { for (i = 1; i <= n; i++) printf "%s%s=%s", (i > 1 ? "\037" : ""), w[i], f[w[i]] }' "$TMP/raw")"
+
+    if [ "${ST_STATUS[$id]:-ok}" = supprime ]; then
+        note "[$lst] RÉAPPARU sur les serveurs GD : $name ($id)"
+        notify "♻️ [$lst] **Réapparu** sur les serveurs GD : $(gdlink "$name" "$id")"
+        ST_STATUS[$id]=ok
+    fi
 
     changed=0
-    if [ -z "${ST_SHA[$id]:-}" ] || [ ! -f "$FILES/${ST_FILE[$id]:-/nonexistent}" ]; then
-        [ -z "${ST_SHA[$id]:-}" ] && { note "[$lst] NOUVEAU : $name ($id) v$ver"; new=$((new + 1)); changed=1; }
+    if [ -z "${ST_SHA[$id]:-}" ] || [ -z "$old" ] || [ ! -f "$FILES/$old" ]; then
+        if [ -z "${ST_SHA[$id]:-}" ]; then note "[$lst] NOUVEAU : $name ($id) v$ver"; new=$((new + 1)); changed=1; fi
     elif [ "$sha" != "${ST_SHA[$id]}" ]; then
-        # niveau modifié : on archive l'ancienne version
+        # contenu du niveau modifié : on archive l'ancienne version
         hist="historique/$(safe_name "$name") ($id)/${DAY}_v${ST_VER[$id]}.gmd"
-        mkdir -p "$FILES/$(dirname "$hist")" && cp "$FILES/${ST_FILE[$id]}" "$FILES/$hist" && nc_put "$hist"
-        note "[$lst] MODIFIÉ : $name ($id) v${ST_VER[$id]} -> v$ver (ancienne version dans $hist)"
+        mkdir -p "$FILES/$(dirname "$hist")" && cp "$FILES/$old" "$FILES/$hist" && nc_put "$hist"
+        extra=""
+        if [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then extra="$(info_diff "${ST_INFO[$id]}" "$info")"; fi
+        note "[$lst] MODIFIÉ : $name ($id) v${ST_VER[$id]} -> v$ver${extra:+ (infos : $extra)} (ancienne version dans $hist)"
+        notify "✏️ [$lst] **Niveau modifié** : $(gdlink "$name" "$id") de $author (v${ST_VER[$id]} → v$ver)${extra:+ — infos aussi modifiées : $extra}"
         updated=$((updated + 1)); changed=1
+    elif [ -n "${ST_INFO[$id]:-}" ] && [ "$info" != "${ST_INFO[$id]}" ]; then
+        what="$(info_diff "${ST_INFO[$id]}" "$info")"
+        note "[$lst] INFOS MODIFIÉES : $name ($id) : $what"
+        notify "📝 [$lst] Infos modifiées pour $(gdlink "$name" "$id") : $what"
+        infos=$((infos + 1)); changed=1
     else
         same=$((same + 1))
-        if [ "$ver" = "${ST_VER[$id]}" ] && [ "${ST_FILE[$id]}" = "$rel" ]; then continue; fi
+    fi
+    if [ "$changed" = 0 ] && [ "$old" = "$rel" ] && [ "$ver" = "${ST_VER[$id]}" ] && [ -n "${ST_INFO[$id]:-}" ]; then
+        ST_LIST[$id]="$lst"; continue   # rien n'a changé
     fi
 
     mkdir -p "$FILES/$lst"
-    if [ -n "${ST_FILE[$id]:-}" ] && [ "${ST_FILE[$id]}" != "$rel" ] && [ -f "$FILES/${ST_FILE[$id]}" ]; then
-        rm -f "$FILES/${ST_FILE[$id]}"; nc_delete "${ST_FILE[$id]}"
-    fi
     mv "$TMP/level.gmd" "$FILES/$rel"
+    if [ -n "$old" ] && [ "$old" != "$rel" ] && [ -f "$FILES/$old" ]; then
+        unlink "$FILES/$old"; nc_delete "$old"
+        [ "$changed" = 0 ] && note "[$lst] RENOMMÉ : $old -> $rel"
+    fi
     nc_put "$rel"
     [ "$DAILY" = 1 ] && [ "$changed" = 1 ] && nc_copy "$rel" "$DAY/$rel"   # copie dans le dossier du jour
-    ST_VER[$id]="$ver"; ST_SHA[$id]="$sha"; ST_LIST[$id]="$lst"; ST_FILE[$id]="$rel"
+    ST_VER[$id]="$ver"; ST_SHA[$id]="$sha"; ST_LIST[$id]="$lst"; ST_FILE[$id]="$rel"; ST_INFO[$id]="$info"
     save_state   # sauvegarde au fil de l'eau : une interruption ne fait rien perdre
 done
 save_state
@@ -364,5 +453,10 @@ fi
 [ "$RESYNC" = 1 ] && nc_resync
 nc_flush || failed=$((failed + 1))
 
-log "Terminé : $new nouveaux, $updated modifiés, $same inchangés, $failed en échec"
+summary="$new nouveaux, $updated modifiés, $infos infos modifiées, $deleted supprimés, $same inchangés, $failed en échec"
+[ "$FIRST_RUN" = 1 ] && [ "$new" -gt 0 ] && notify "📦 Premier passage : $new niveaux archivés dans Nextcloud."
+[ "${GD_BLOCKED:-0}" = 1 ] && notify "⚠️ Les serveurs GD ont limité les requêtes : passage interrompu, la suite sera faite au prochain passage."
+discord_send "$summary"
+printf '%s — %s\n' "$(date '+%d/%m/%Y %H:%M')" "$summary" > "$DATA_DIR/dernier_passage.txt"
+log "Terminé : $summary"
 [ "$failed" -eq 0 ]
