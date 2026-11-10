@@ -322,6 +322,7 @@ while IFS=$'\t' read -r id ver sha lst file info status; do
     [ "$file" = - ] && file=""; [ "${info:-}" = - ] && info=""
     case "${status:-ok}" in supprime|deleted) status=deleted ;; *) status=ok ;; esac
     ST_VER[$id]="$ver"; ST_SHA[$id]="$sha"; ST_LIST[$id]="$lst"; ST_FILE[$id]="$file"
+    info="${info%%$'\037'9=*}"   # saved by an older version with the difficulty fields (last ones): drop them
     ST_INFO[$id]="${info:-}"; ST_STATUS[$id]="$status"
 done < "$STATE"
 FIRST_RUN=0; [ "${#ST_VER[@]}" -eq 0 ] && FIRST_RUN=1
@@ -408,7 +409,8 @@ make_gmd() {  # make_gmd <response file (level part)> <name> <author> <output>
 }
 
 # Info compared in addition to the level data: GD field -> label
-INFO_FIELDS="2 3 12 35 52 53 15 37 18 19 42 9 17 43 25"
+# Not compared: the difficulty (9, 17, 43, 25), which changes with the players' votes on unrated levels.
+INFO_FIELDS="2 3 12 35 52 53 15 37 18 19 42"
 info_label() {
     case "$1" in
         2) echo "name" ;; 3) echo "description" ;; 12) echo "official song" ;; 35) echo "song" ;;
