@@ -24,7 +24,10 @@ GACHA_PASSWORD=""
 GACHA_CLAN="TSL"
 
 # --- Options ------------------------------------------------------------------
-# Daily refresh of the collections, around this hour (server time)
+# Quick refresh every N minutes: 1 request per member, and only the collections that changed are read
+# again (0 = only the daily refresh)
+REFRESH_MINUTES=15
+# Full refresh of every collection once a day, around this hour (server time)
 SYNC_HOUR=5
 # Pause between two requests to the site (seconds)
 REQUEST_DELAY=1

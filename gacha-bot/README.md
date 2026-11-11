@@ -2,7 +2,7 @@
 
 A second Discord bot that shows which **[Extreme Demon Gacha](https://demongacha.com)** cards the members of the **TSL** clan own.
 
-Once a day it reads the site with its own account (made for this, with the site owner's agreement), reads the clan's member list and each member's collection, and keeps them in `/var/lib/gacha-bot/cache.json`. The commands answer from that file, so they are instant and do not touch the site. **It only reads**: it never opens packs, trades, duels or changes anything.
+Every 15 minutes (`REFRESH_MINUTES`) it does a **quick refresh**: one request per member for their totals (cards, holos, packs opened), and only the collections whose totals changed are read again (about 80 requests, 1–2 minutes). Once a day (`SYNC_HOUR`) it does a **full refresh** of every collection, in case a 1-for-1 trade left the totals unchanged. It reads the site with its own account (made for this, with the site owner's agreement), reads the clan's member list and each member's collection, and keeps them in `/var/lib/gacha-bot/cache.json`. The commands answer from that file, so they are instant and do not touch the site. **It only reads**: it never opens packs, trades, duels or changes anything.
 
 | Command | What it does |
 |---|---|

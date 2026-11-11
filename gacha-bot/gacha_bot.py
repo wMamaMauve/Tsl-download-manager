@@ -66,7 +66,8 @@ CHANNEL_ID = int(setting("DISCORD_CHANNEL_ID", "0") or 0)   # (optional) where t
 SESSION_DAYS = 30                            # how long a demongacha session lasts
 CLAN = setting("GACHA_CLAN", "TSL")
 DATA_DIR = Path(setting("DATA_DIR", "/var/lib/gacha-bot"))
-SYNC_HOUR = int(setting("SYNC_HOUR", "5") or 5)          # daily refresh, server local time
+SYNC_HOUR = int(setting("SYNC_HOUR", "5") or 5)          # daily full refresh, server local time
+REFRESH_MINUTES = int(setting("REFRESH_MINUTES", "15") or 0)   # quick refresh every N minutes (0 = off)
 REQUEST_DELAY = float(setting("REQUEST_DELAY", "1") or 1)  # seconds between two requests to the site
 CACHE = DATA_DIR / "cache.json"
 SESSION_FILE = DATA_DIR / "session.json"   # the current sid (the site may renew it) and when it was set
@@ -211,54 +212,93 @@ def card_counts(c):
 PROGRESS = {"text": ""}   # where the running refresh is, shown by /gachastatus and /gachasync
 
 
-async def sync(gacha):
-    """Reads the levels, the clan and every member's collection; writes the cache. Returns a summary."""
+STATS_KEYS = ("totalCards", "holoCards", "uniqueLevels", "uniqueHolo", "packsOpened")
+
+
+def collection_cards(items):
+    cards = {}
+    for c in items:
+        lid = c.get("id") or c.get("levelId")
+        if not lid:
+            continue
+        count, holo = card_counts(c)
+        prev = cards.get(lid, {"count": 0, "holo": 0})   # one level may come once per variant
+        cards[lid] = {"count": prev["count"] + count, "holo": prev["holo"] + holo}
+    return cards
+
+
+async def sync(gacha, full=True):
+    """Reads the clan and the members' collections and writes the cache. Returns a summary.
+    full=False (quick refresh): asks each member's totals only (1 request each) and reads again only the
+    collections whose totals changed; the cards of the game are read again every 6 hours."""
     t0 = time.time()
-    PROGRESS["text"] = "reading the cards of the game"
-    levels = await gacha.pages("/api/levels?sort=rank_asc")
+    old = load_cache() or {}
+    if not full and not old:
+        full = True
+    if full or time.time() - old.get("levels_updated", 0) > 6 * 3600:
+        PROGRESS["text"] = "reading the cards of the game"
+        levels = await gacha.pages("/api/levels?sort=rank_asc")
+        level_map = {lv["id"]: {k: lv.get(k) for k in ("rank", "name", "tier", "creator", "verifier", "thumb",
+                                                       "video", "value", "points", "gdId")} for lv in levels}
+        levels_updated = time.time()
+    else:
+        level_map, levels_updated = old["levels"], old.get("levels_updated", old.get("updated", 0))
     clan = await gacha.get(f"/api/clans/{quote(CLAN)}", auth=False)
     members = clan.get("members") or []
-    collections, stats, failed = {}, {}, []
+    old_coll, old_stats = old.get("collections") or {}, old.get("stats") or {}
+    old_checked = old.get("checked") or {}
+    collections, stats, checked, failed, reread = {}, {}, {}, [], 0
     await gacha.login()
     for i, m in enumerate(members, 1):
         name = m["username"]
-        PROGRESS["text"] = f"collection {i}/{len(members)} ({name})"
+        PROGRESS["text"] = f"collection {i}/{len(members)} ({name})" + ("" if full else " (quick)")
         if i % 10 == 0:
             log.info("refresh: %s", PROGRESS["text"])
+        url = f"/api/collection?user={quote(name)}&sort=rank_asc"
         try:
+            if not full and name in old_coll and name in old_stats:
+                probe = await gacha.get(f"{url}&page=1&pageSize=1")
+                st = probe.get("stats") if isinstance(probe.get("stats"), dict) else None
+                if st and all(st.get(k) == old_stats[name].get(k) for k in STATS_KEYS):
+                    collections[name], stats[name] = old_coll[name], st   # nothing changed
+                    checked[name] = time.time()
+                    continue
             head = {}
-            items = await gacha.pages(f"/api/collection?user={quote(name)}&sort=rank_asc", first=head)
+            items = await gacha.pages(url, first=head)
+            reread += 1
+        except SessionExpired:
+            raise
         except SiteError as e:
             log.warning("collection of %s: %s", name, e)
             failed.append(name)
+            if name in old_coll:   # keep what we had
+                collections[name], checked[name] = old_coll[name], old_checked.get(name, old.get("updated", 0))
+                if name in old_stats:
+                    stats[name] = old_stats[name]
             continue
-        cards = {}
-        for c in items:
-            lid = c.get("id") or c.get("levelId")
-            if not lid:
-                continue
-            count, holo = card_counts(c)
-            prev = cards.get(lid, {"count": 0, "holo": 0})   # one level may come once per variant
-            cards[lid] = {"count": prev["count"] + count, "holo": prev["holo"] + holo}
-        collections[name] = cards
+        collections[name] = collection_cards(items)
+        checked[name] = time.time()
         if isinstance(head.get("stats"), dict):   # totals computed by the site (completion, packs opened…)
             stats[name] = head["stats"]
     data = {
         "updated": time.time(),
+        "levels_updated": levels_updated,
         "clan": {k: clan.get(k) for k in ("name", "tag", "color", "score", "rank", "max")},
         "members": [{k: m.get(k) for k in ("username", "clanRole", "score", "joinedAt")} for m in members],
-        "levels": {lv["id"]: {k: lv.get(k) for k in ("rank", "name", "tier", "creator", "verifier", "thumb",
-                                                     "video", "value", "points", "gdId")} for lv in levels},
+        "levels": level_map,
         "collections": collections,
         "stats": stats,
+        "checked": checked,
         "failed": failed,
+        "last_full": time.time() if full else old.get("last_full", 0),
     }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = CACHE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(CACHE)
-    summary = (f"{len(collections)}/{len(members)} collections, {len(levels)} cards, "
-               f"{time.time() - t0:.0f} s" + (f", failed: {', '.join(failed)}" if failed else ""))
+    summary = (f"{'full' if full else 'quick'}: {len(collections)}/{len(members)} collections "
+               f"({reread} read again), {len(level_map)} cards, {time.time() - t0:.0f} s"
+               + (f", failed: {', '.join(failed)}" if failed else ""))
     log.info("sync done: %s", summary)
     return summary
 
@@ -446,10 +486,10 @@ class GachaBot(discord.Client):
                                     "site with the bot's account and put the new `sid` cookie in `GACHA_SID` "
                                     "(`/etc/gacha-bot.conf`), then `systemctl restart gacha-bot`.")
 
-    async def run_sync(self):
+    async def run_sync(self, full=True):
         async with self.sync_lock:
             try:
-                summary = await sync(self.gacha)
+                summary = await sync(self.gacha, full)
                 self.last_error = None
                 return summary
             except Exception as e:   # keep the bot running; shown by /gachastatus
@@ -464,27 +504,29 @@ class GachaBot(discord.Client):
                 await self.check_session_age()
 
     async def daily_sync(self):
+        """A full refresh at startup if the data is old, then every day at SYNC_HOUR, and a quick
+        refresh every REFRESH_MINUTES minutes in between."""
         await self.wait_until_ready()
         data = load_cache()
-        if not data or time.time() - data.get("updated", 0) > 23 * 3600:
+        if not data or time.time() - data.get("last_full", data.get("updated", 0)) > 23 * 3600:
             try:
-                await self.run_sync()
+                await self.run_sync(full=True)
             except Exception:
                 pass
         while not self.is_closed():
             now = dt.datetime.now()
-            nxt = now.replace(hour=SYNC_HOUR, minute=7, second=0, microsecond=0)
-            if nxt <= now:
-                nxt += dt.timedelta(days=1)
-            await asyncio.sleep((nxt - now).total_seconds())
+            full_at = now.replace(hour=SYNC_HOUR, minute=7, second=0, microsecond=0)
+            if full_at <= now:
+                full_at += dt.timedelta(days=1)
+            wait = (full_at - now).total_seconds()
+            full = True
+            if REFRESH_MINUTES > 0 and REFRESH_MINUTES * 60 < wait:
+                wait, full = REFRESH_MINUTES * 60, False
+            await asyncio.sleep(wait)
             try:
-                await self.run_sync()
+                await self.run_sync(full=full)
             except Exception:
-                await asyncio.sleep(1800)   # try again in 30 minutes
-                try:
-                    await self.run_sync()
-                except Exception:
-                    pass
+                await asyncio.sleep(600)   # the next turn of the loop tries again
 
     async def close(self):
         await self.gacha.close()
@@ -570,7 +612,9 @@ async def cmd_cards(interaction: discord.Interaction, player: str, tier: app_com
         head += "\n" + " · ".join(f"{TIER_ICON.get(t, '')} {by_tier[t]}" for t in TIERS if by_tier.get(t))
     lines = [level_line(lv, c["count"], c["holo"]) for lv, c in owned] or ["No card here."]
     pages = [head + "\n\n" + p for p in paginate(lines, 25, 3500)]
-    view = PagedView(f"{name}'s cards", pages, interaction.user.id, footer=updated_text(data))
+    chk = (data.get("checked") or {}).get(name)
+    footer = f"Checked {dt.datetime.fromtimestamp(chk):%Y-%m-%d %H:%M}" if chk else updated_text(data)
+    view = PagedView(f"{name}'s cards", pages, interaction.user.id, footer=footer)
     await view.send(interaction)
 
 
@@ -654,7 +698,12 @@ async def cmd_status(interaction: discord.Interaction):
             e.add_field(name="Could not be read", value=", ".join(data["failed"])[:1024], inline=False)
     else:
         e.description = "No data yet."
-    e.add_field(name="Next refresh", value=f"Every day around {SYNC_HOUR:02d}:07 (server time)", inline=False)
+    quick = f"Quick refresh every {REFRESH_MINUTES} min (only the collections that changed are read again), " \
+        if REFRESH_MINUTES > 0 else ""
+    e.add_field(name="Refreshes", inline=False,
+                value=f"{quick}full refresh every day around {SYNC_HOUR:02d}:07 (server time)")
+    if data and data.get("last_full"):
+        e.add_field(name="Last full refresh", value=f"<t:{int(data['last_full'])}:R>", inline=True)
     exp = session_expires_at()
     if exp:
         e.add_field(name="Session of the bot's account", inline=False,
@@ -675,7 +724,7 @@ async def cmd_sync(interaction: discord.Interaction):
             "`/gachastatus` when it is done.", ephemeral=True)
     await interaction.response.send_message("Refreshing the collections… (a few minutes)")
     try:
-        summary = await bot.run_sync()
+        summary = await bot.run_sync(full=True)
         await interaction.followup.send(f"✅ Refresh done: {summary}.")
     except Exception as e:
         await interaction.followup.send(f"❌ Refresh failed: {e}")
