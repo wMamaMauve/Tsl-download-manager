@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+from yarl import URL as yarl_url   # installed with aiohttp
+
 import aiohttp
 import discord
 from discord import app_commands
@@ -57,13 +59,17 @@ def setting(name, default=""):
 TOKEN = setting("DISCORD_BOT_TOKEN")
 GUILD_ID = int(setting("DISCORD_GUILD_ID", "0") or 0)
 SITE = setting("GACHA_SITE", "https://demongacha.com").rstrip("/")
-GACHA_USER = setting("GACHA_USERNAME")
+GACHA_SID = setting("GACHA_SID")            # session cookie of the bot's account (accounts that log in with Discord)
+GACHA_USER = setting("GACHA_USERNAME")      # or a username + password, for accounts that have one
 GACHA_PASS = setting("GACHA_PASSWORD")
+CHANNEL_ID = int(setting("DISCORD_CHANNEL_ID", "0") or 0)   # (optional) where to warn when the session expires
+SESSION_DAYS = 30                            # how long a demongacha session lasts
 CLAN = setting("GACHA_CLAN", "TSL")
 DATA_DIR = Path(setting("DATA_DIR", "/var/lib/gacha-bot"))
 SYNC_HOUR = int(setting("SYNC_HOUR", "5") or 5)          # daily refresh, server local time
 REQUEST_DELAY = float(setting("REQUEST_DELAY", "1") or 1)  # seconds between two requests to the site
 CACHE = DATA_DIR / "cache.json"
+SESSION_FILE = DATA_DIR / "session.json"   # the current sid (the site may renew it) and when it was set
 COLOUR = 0x287DFF
 TIERS = ["Apex", "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common", "Limited"]
 TIER_ICON = {"Apex": "🟥", "Mythic": "🟪", "Legendary": "🟨", "Epic": "🟦", "Rare": "🟩",
@@ -76,9 +82,42 @@ class SiteError(Exception):
     pass
 
 
+class SessionExpired(SiteError):
+    pass
+
+
+def load_session():
+    """{'conf_sid', 'sid', 'since'}: the sid in use. A new GACHA_SID in the config replaces it."""
+    try:
+        st = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    if GACHA_SID and st.get("conf_sid") != GACHA_SID:
+        st = {"conf_sid": GACHA_SID, "sid": GACHA_SID, "since": time.time()}
+        save_session(st)
+    return st
+
+
+def save_session(st):
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = SESSION_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(SESSION_FILE)
+    except OSError:
+        log.exception("could not save the session")
+
+
+def session_expires_at():
+    st = load_session()
+    return st["since"] + SESSION_DAYS * 86400 if st.get("sid") and st.get("since") else None
+
+
 class Gacha:
-    """Read-only client for demongacha.com: logs in with the configured account (cookie 'sid')
-    and logs in again by itself when the session has expired."""
+    """Read-only client for demongacha.com. Uses the session cookie 'sid' of the bot's account
+    (GACHA_SID; the site renews it sometimes, the new one is kept), or logs in with a username and
+    password when the account has one."""
 
     def __init__(self):
         self.session = None
@@ -88,15 +127,38 @@ class Gacha:
             self.session = aiohttp.ClientSession(headers={"User-Agent": USER_AGENT},
                                                  cookie_jar=aiohttp.CookieJar(unsafe=True),   # keeps the 'sid' cookie
                                                  timeout=aiohttp.ClientTimeout(total=60))
+            sid = load_session().get("sid") if GACHA_SID else None
+            if sid:
+                self.session.cookie_jar.update_cookies({"sid": sid}, response_url=yarl_url(SITE))
+
+    def keep_renewed_sid(self):
+        """The site may send a new sid: keep it for the next restarts."""
+        if not GACHA_SID or not self.session:
+            return
+        for c in self.session.cookie_jar:
+            if c.key == "sid" and c.value:
+                st = load_session()
+                if c.value != st.get("sid"):
+                    st.update(sid=c.value, since=time.time())
+                    save_session(st)
+                    log.info("the site renewed the session")
 
     async def close(self):
         if self.session and not self.session.closed:
             await self.session.close()
 
     async def login(self):
-        if not GACHA_USER or not GACHA_PASS:
-            raise SiteError("GACHA_USERNAME / GACHA_PASSWORD are missing in the config")
+        """Makes sure the bot is logged in (raises SessionExpired / SiteError otherwise)."""
         await self.open()
+        if GACHA_SID:
+            me = await self.get("/api/me", auth=False)
+            if not me:
+                raise SessionExpired("the bot's demongacha.com session has expired: log in again with the bot's "
+                                     "account and put the new 'sid' cookie in GACHA_SID (/etc/gacha-bot.conf)")
+            log.info("logged in to %s as %s (session)", SITE, me.get("username") if isinstance(me, dict) else "?")
+            return
+        if not GACHA_USER or not GACHA_PASS:
+            raise SiteError("no account in the config: set GACHA_SID (or GACHA_USERNAME + GACHA_PASSWORD)")
         async with self.session.post(f"{SITE}/api/login", json={"username": GACHA_USER, "password": GACHA_PASS}) as r:
             if r.status != 200:
                 raise SiteError(f"login refused (HTTP {r.status}): {(await r.text())[:200]}")
@@ -106,6 +168,11 @@ class Gacha:
         await self.open()
         await asyncio.sleep(REQUEST_DELAY)
         async with self.session.get(f"{SITE}{path}") as r:
+            self.keep_renewed_sid()
+            if r.status == 401 and auth and GACHA_SID:
+                await self.login()   # raises SessionExpired if the session is really gone
+                if _retry:
+                    return await self.get(path, auth, _retry=False)
             if r.status == 401 and auth and _retry:
                 await self.login()
                 return await self.get(path, auth, _retry=False)
@@ -335,6 +402,7 @@ class GachaBot(discord.Client):
         self.gacha = Gacha()
         self.sync_lock = asyncio.Lock()
         self.last_error = None
+        self.warned = {}   # warning kind -> date it was last posted (one per day at most)
 
     async def setup_hook(self):
         if GUILD_ID:
@@ -345,6 +413,25 @@ class GachaBot(discord.Client):
             await self.tree.sync()
         self.loop.create_task(self.daily_sync())
 
+    async def warn(self, kind, text):
+        """Posts a warning in DISCORD_CHANNEL_ID (at most once a day per kind)."""
+        today = dt.date.today()
+        if not CHANNEL_ID or self.warned.get(kind) == today:
+            return
+        try:
+            channel = self.get_channel(CHANNEL_ID) or await self.fetch_channel(CHANNEL_ID)
+            await channel.send(embed=discord.Embed(title="Gacha bot", description=text, colour=0xE67E22))
+            self.warned[kind] = today
+        except discord.HTTPException:
+            log.exception("could not post the warning")
+
+    async def check_session_age(self):
+        exp = session_expires_at()
+        if exp and 0 < exp - time.time() < 4 * 86400:
+            await self.warn("soon", f"⚠️ The bot's demongacha.com session expires <t:{int(exp)}:R>. Log in on the "
+                                    "site with the bot's account and put the new `sid` cookie in `GACHA_SID` "
+                                    "(`/etc/gacha-bot.conf`), then `systemctl restart gacha-bot`.")
+
     async def run_sync(self):
         async with self.sync_lock:
             try:
@@ -354,7 +441,12 @@ class GachaBot(discord.Client):
             except Exception as e:   # keep the bot running; shown by /gachastatus
                 self.last_error = f"{dt.datetime.now():%Y-%m-%d %H:%M}: {e}"
                 log.exception("sync failed")
+                if isinstance(e, SessionExpired):
+                    await self.warn("expired", f"❌ The collections could not be refreshed: {e}. Then "
+                                               "`systemctl restart gacha-bot` (or `/gachasync`).")
                 raise
+            finally:
+                await self.check_session_age()
 
     async def daily_sync(self):
         await self.wait_until_ready()
@@ -540,6 +632,10 @@ async def cmd_status(interaction: discord.Interaction):
     else:
         e.description = "No data yet."
     e.add_field(name="Next refresh", value=f"Every day around {SYNC_HOUR:02d}:07 (server time)", inline=False)
+    exp = session_expires_at()
+    if exp:
+        e.add_field(name="Session of the bot's account", inline=False,
+                    value=f"Expires <t:{int(exp)}:R> (<t:{int(exp)}:D>), unless the site renews it")
     if bot.sync_lock.locked():
         e.add_field(name="Now", value="A refresh is in progress.", inline=False)
     if bot.last_error:

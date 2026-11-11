@@ -6,10 +6,18 @@
 DISCORD_BOT_TOKEN=""
 # (optional) ID of your Discord server: the commands show up immediately
 DISCORD_GUILD_ID=""
+# (optional) channel ID where the bot warns when its session is about to expire
+DISCORD_CHANNEL_ID=""
 
 # --- Extreme Demon Gacha ------------------------------------------------------
 # The account the bot reads the collections with (made for this, with the site owner's agreement).
 # It only reads: it never opens packs, trades or plays.
+# Session cookie of that account (accounts that log in with Discord). On a computer:
+#   log in on demongacha.com with the bot's account > F12 > Application (Chrome) or Storage (Firefox)
+#   > Cookies > https://demongacha.com > copy the value of "sid".
+# It lasts 30 days: the bot warns in DISCORD_CHANNEL_ID a few days before, then put the new one here.
+GACHA_SID=""
+# (or, for an account that has a password)
 GACHA_USERNAME=""
 GACHA_PASSWORD=""
 # Clan whose members are followed (its tag)
