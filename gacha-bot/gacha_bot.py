@@ -208,16 +208,23 @@ def card_counts(c):
     return count, int(holo)
 
 
+PROGRESS = {"text": ""}   # where the running refresh is, shown by /gachastatus and /gachasync
+
+
 async def sync(gacha):
     """Reads the levels, the clan and every member's collection; writes the cache. Returns a summary."""
     t0 = time.time()
+    PROGRESS["text"] = "reading the cards of the game"
     levels = await gacha.pages("/api/levels?sort=rank_asc")
     clan = await gacha.get(f"/api/clans/{quote(CLAN)}", auth=False)
     members = clan.get("members") or []
     collections, stats, failed = {}, {}, []
     await gacha.login()
-    for m in members:
+    for i, m in enumerate(members, 1):
         name = m["username"]
+        PROGRESS["text"] = f"collection {i}/{len(members)} ({name})"
+        if i % 10 == 0:
+            log.info("refresh: %s", PROGRESS["text"])
         try:
             head = {}
             items = await gacha.pages(f"/api/collection?user={quote(name)}&sort=rank_asc", first=head)
@@ -396,8 +403,9 @@ def updated_text(data):
 
 
 async def no_data(interaction):
-    await interaction.response.send_message("No data yet: the first refresh is in progress (a few minutes), "
-                                            "try again soon.", ephemeral=True)
+    now = f" (now: {PROGRESS['text']})" if PROGRESS["text"] else ""
+    await interaction.response.send_message(f"No data yet: the first refresh is in progress{now}. It takes about "
+                                            "10–15 minutes, try again then.", ephemeral=True)
 
 
 # --------------------------------------------------------------------------- the bot
@@ -452,6 +460,7 @@ class GachaBot(discord.Client):
                                                "`systemctl restart gacha-bot` (or `/gachasync`).")
                 raise
             finally:
+                PROGRESS["text"] = ""
                 await self.check_session_age()
 
     async def daily_sync(self):
@@ -651,7 +660,7 @@ async def cmd_status(interaction: discord.Interaction):
         e.add_field(name="Session of the bot's account", inline=False,
                     value=f"Expires <t:{int(exp)}:R> (<t:{int(exp)}:D>), unless the site renews it")
     if bot.sync_lock.locked():
-        e.add_field(name="Now", value="A refresh is in progress.", inline=False)
+        e.add_field(name="Now", value=f"A refresh is in progress: {PROGRESS['text'] or 'starting'}.", inline=False)
     if bot.last_error:
         e.add_field(name="Last error", value=bot.last_error[:1024], inline=False)
     await interaction.response.send_message(embed=e)
@@ -661,7 +670,9 @@ async def cmd_status(interaction: discord.Interaction):
 @app_commands.default_permissions(manage_guild=True)
 async def cmd_sync(interaction: discord.Interaction):
     if bot.sync_lock.locked():
-        return await interaction.response.send_message("A refresh is already in progress.", ephemeral=True)
+        return await interaction.response.send_message(
+            f"A refresh is already in progress ({PROGRESS['text'] or 'starting'}). The result will be in "
+            "`/gachastatus` when it is done.", ephemeral=True)
     await interaction.response.send_message("Refreshing the collections… (a few minutes)")
     try:
         summary = await bot.run_sync()
