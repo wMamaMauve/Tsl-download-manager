@@ -1,0 +1,23 @@
+# gacha-bot configuration — copy to /etc/gacha-bot.conf (chmod 600)
+
+# --- Discord ------------------------------------------------------------------
+# A second bot: https://discord.com/developers/applications > New Application > Bot > Reset Token
+# OAuth2 > URL Generator: "bot" + "applications.commands", permissions "Send Messages" + "Embed Links"
+DISCORD_BOT_TOKEN=""
+# (optional) ID of your Discord server: the commands show up immediately
+DISCORD_GUILD_ID=""
+
+# --- Extreme Demon Gacha ------------------------------------------------------
+# The account the bot reads the collections with (made for this, with the site owner's agreement).
+# It only reads: it never opens packs, trades or plays.
+GACHA_USERNAME=""
+GACHA_PASSWORD=""
+# Clan whose members are followed (its tag)
+GACHA_CLAN="TSL"
+
+# --- Options ------------------------------------------------------------------
+# Daily refresh of the collections, around this hour (server time)
+SYNC_HOUR=5
+# Pause between two requests to the site (seconds)
+REQUEST_DELAY=1
+DATA_DIR="/var/lib/gacha-bot"
