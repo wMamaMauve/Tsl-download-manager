@@ -183,12 +183,14 @@ class Gacha:
                 raise SiteError(f"{path}: HTTP {r.status} {(await r.text())[:200]}")
             return await r.json(content_type=None)
 
-    async def pages(self, path, key="items", page_size=200):
-        """Every item of a paged list (?page=…&pageSize=…)."""
+    async def pages(self, path, key="items", page_size=200, first=None):
+        """Every item of a paged list (?page=…&pageSize=…). `first` (a dict) receives the first answer."""
         items, page, pages = [], 1, 1
         sep = "&" if "?" in path else "?"
         while page <= pages:
             d = await self.get(f"{path}{sep}page={page}&pageSize={page_size}")
+            if page == 1 and first is not None:
+                first.update(d)
             items += d.get(key) or []
             pages = int(d.get("pages") or 1)
             page += 1
@@ -212,12 +214,13 @@ async def sync(gacha):
     levels = await gacha.pages("/api/levels?sort=rank_asc")
     clan = await gacha.get(f"/api/clans/{quote(CLAN)}", auth=False)
     members = clan.get("members") or []
-    collections, failed = {}, []
+    collections, stats, failed = {}, {}, []
     await gacha.login()
     for m in members:
         name = m["username"]
         try:
-            items = await gacha.pages(f"/api/collection?user={quote(name)}&sort=rank_asc")
+            head = {}
+            items = await gacha.pages(f"/api/collection?user={quote(name)}&sort=rank_asc", first=head)
         except SiteError as e:
             log.warning("collection of %s: %s", name, e)
             failed.append(name)
@@ -231,6 +234,8 @@ async def sync(gacha):
             prev = cards.get(lid, {"count": 0, "holo": 0})   # one level may come once per variant
             cards[lid] = {"count": prev["count"] + count, "holo": prev["holo"] + holo}
         collections[name] = cards
+        if isinstance(head.get("stats"), dict):   # totals computed by the site (completion, packs opened…)
+            stats[name] = head["stats"]
     data = {
         "updated": time.time(),
         "clan": {k: clan.get(k) for k in ("name", "tag", "color", "score", "rank", "max")},
@@ -238,6 +243,7 @@ async def sync(gacha):
         "levels": {lv["id"]: {k: lv.get(k) for k in ("rank", "name", "tier", "creator", "verifier", "thumb",
                                                      "video", "value", "points", "gdId")} for lv in levels},
         "collections": collections,
+        "stats": stats,
         "failed": failed,
     }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -544,6 +550,11 @@ async def cmd_cards(interaction: discord.Interaction, player: str, tier: app_com
     for lv, _ in owned:
         by_tier[lv.get("tier")] = by_tier.get(lv.get("tier"), 0) + 1
     head = f"**{num(total_unique)}** / {num(len(levels))} cards · **{total_holo}** holo · {num(copies)} copies"
+    st = (data.get("stats") or {}).get(name) or {}
+    if st.get("completion") is not None:
+        head += f" · **{st['completion'] * 100:.1f}%** complete"
+    if st.get("packsOpened") is not None:
+        head += f" · {num(st['packsOpened'])} packs opened"
     if tier or holo:
         head += f"\nShowing **{len(owned)}**" + (f" {tier.value}" if tier else "") + (" holo" if holo else "") + " cards"
     else:
@@ -609,7 +620,10 @@ async def cmd_clan(interaction: discord.Interaction):
     for i, m in enumerate(members, 1):
         coll = data["collections"].get(m["username"])
         role = {"owner": " 👑", "co": " ⭐"}.get(m.get("clanRole") or "", "")
+        st = (data.get("stats") or {}).get(m["username"]) or {}
         cards = f" · {len(coll)}/{total} cards" if coll is not None else ""
+        if st.get("completion") is not None:
+            cards += f" ({st['completion'] * 100:.0f}%)"
         lines.append(f"`{i:>2}.` **{m['username']}**{role} · {num(m.get('score'))} pts{cards}")
     c = data["clan"]
     head = f"Clan rank **#{c.get('rank')}** · {num(c.get('score'))} pts · {len(members)}/{c.get('max')} members\n\n"
