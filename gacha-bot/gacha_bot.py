@@ -6,7 +6,7 @@ Read-only: once a day it logs in with the account given in the config (made for 
 site owner's agreement), reads the clan's member list and every member's collection, and keeps them
 in a cache file. It never opens packs, trades, duels or changes anything.
 
-Commands: /cards /whohas /missing /clan /gachastatus /gachasync /help
+Commands: /cards /find /missing /clan /gachastatus /gachasync /help
 Config: /etc/gacha-bot.conf (see gacha-bot.conf.example), or the GACHA_CONF variable.
 """
 
@@ -554,10 +554,10 @@ async def cmd_cards(interaction: discord.Interaction, player: str, tier: app_com
     await view.send(interaction)
 
 
-@bot.tree.command(name="whohas", description="Which clan members own a card")
+@bot.tree.command(name="find", description="Find which clan members own a card")
 @app_commands.describe(level="Level name, rank (#12) or ID", holo="Only holo copies")
 @app_commands.autocomplete(level=level_autocomplete)
-async def cmd_whohas(interaction: discord.Interaction, level: str, holo: bool = False):
+async def cmd_find(interaction: discord.Interaction, level: str, holo: bool = False):
     data = load_cache()
     if not data:
         return await no_data(interaction)
@@ -664,7 +664,7 @@ async def cmd_help(interaction: discord.Interaction):
         "`<…>` = required, `[…]` = optional."))
     e.add_field(name="Commands", inline=False, value="\n".join([
         "`/cards <player> [tier] [holo]` — the cards a member owns, rarest first, with copies and holos",
-        "`/whohas <level> [holo]` — which members own a card",
+        "`/find <level> [holo]` — which members own a card",
         "`/missing <player> [tier]` — the cards a member does not have yet",
         f"`/clan` — the {CLAN} members, their score and how many cards they have",
         "`/gachastatus` — when the data was last refreshed",

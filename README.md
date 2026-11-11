@@ -78,7 +78,7 @@ Setup: `./install-bot.sh` (installs Python and discord.py), then fill in `DISCOR
 
 ## Second bot: Extreme Demon Gacha
 
-`gacha-bot/` holds a separate Discord bot showing which demongacha.com cards the members of the TSL clan own (`/cards`, `/whohas`, `/missing`, `/clan`). See [gacha-bot/README.md](gacha-bot/README.md).
+`gacha-bot/` holds a separate Discord bot showing which demongacha.com cards the members of the TSL clan own (`/cards`, `/find`, `/missing`, `/clan`). See [gacha-bot/README.md](gacha-bot/README.md).
 
 ## Change detection
 

@@ -7,7 +7,7 @@ Once a day it reads the site with its own account (made for this, with the site 
 | Command | What it does |
 |---|---|
 | `/cards <player> [tier] [holo]` | the cards a clan member owns, rarest first, with copies and holos |
-| `/whohas <level> [holo]` | which clan members own a card (name, rank `#12` or ID) |
+| `/find <level> [holo]` | which clan members own a card (name, rank `#12` or ID) |
 | `/missing <player> [tier]` | the cards a member does not have yet |
 | `/clan` | the clan members, their score and how many cards they have |
 | `/gachastatus` | when the data was last refreshed, and any error |
