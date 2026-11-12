@@ -11,5 +11,8 @@ CHECKER_SECURE_COOKIE=0
 # Downloaded videos: where, how much disk they may use (oldest removed first), quality, longest video
 CHECKER_DATA_DIR="/var/lib/record-checker"
 CHECKER_MAX_GB=10
-CHECKER_MAX_HEIGHT=720
+CHECKER_MAX_HEIGHT=1080
+CHECKER_MAX_FPS=60
+# highest video bitrate downloaded, in Mbit/s
+CHECKER_MAX_MBPS=13
 CHECKER_MAX_MINUTES=30

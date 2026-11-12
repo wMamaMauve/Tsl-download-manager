@@ -61,7 +61,9 @@ HOST = setting("CHECKER_HOST", "127.0.0.1")
 PORT = int(setting("CHECKER_PORT", "8099"))
 DATA_DIR = Path(setting("CHECKER_DATA_DIR", "/var/lib/record-checker"))
 MAX_GB = float(setting("CHECKER_MAX_GB", "10"))            # videos kept on disk (oldest removed first)
-MAX_HEIGHT = int(setting("CHECKER_MAX_HEIGHT", "720"))      # video quality downloaded
+MAX_HEIGHT = int(setting("CHECKER_MAX_HEIGHT", "1080"))     # video quality downloaded: up to 1080p
+MAX_FPS = int(setting("CHECKER_MAX_FPS", "60"))             # … 60 fps
+MAX_MBPS = float(setting("CHECKER_MAX_MBPS", "13"))         # … and 13 Mbit/s (video)
 MAX_MINUTES = int(setting("CHECKER_MAX_MINUTES", "30"))     # longer videos are refused
 SECURE_COOKIE = setting("CHECKER_SECURE_COOKIE", "0") == "1"   # 1 behind HTTPS
 YTDLP = setting("YTDLP", str(Path(sys.executable).with_name("yt-dlp")) if Path(sys.executable).with_name("yt-dlp").exists()
@@ -199,9 +201,11 @@ async def prepare(vid):
                 if m:
                     job["progress"] = f"Downloading the video: {float(m.group(1)):.0f}%"
             # H.264 + AAC first: plays in every browser (and keeps the 60 fps when there is one)
-            fmt = (f"bv*[height<={MAX_HEIGHT}][vcodec^=avc1]+ba[acodec^=mp4a]/"
-                   f"bv*[height<={MAX_HEIGHT}][vcodec^=avc1]+ba/bv*[height<={MAX_HEIGHT}]+ba/b[height<={MAX_HEIGHT}]/b")
-            code, out = await run(YTDLP, "--no-playlist", "--newline", "--no-warnings", "-f", fmt,
+            # best video up to MAX_HEIGHT / MAX_FPS / MAX_MBPS ("?" = also when YouTube does not give the value);
+            # sorted by resolution, then fps, then H.264 (plays and seeks frame by frame everywhere) at equal quality
+            lim = f"[height<={MAX_HEIGHT}][fps<=?{MAX_FPS}][tbr<=?{MAX_MBPS * 1000:.0f}]"
+            fmt = f"bv*{lim}+ba/b{lim}/bv*[height<={MAX_HEIGHT}]+ba/b"
+            code, out = await run(YTDLP, "--no-playlist", "--newline", "--no-warnings", "-f", fmt, "-S", "res,fps,vcodec:h264,acodec:aac",
                                   "--merge-output-format", "mp4", "-o", str(d / "video.%(ext)s"), url,
                                   progress=dl_progress)
             got = next((f for f in d.glob("video.*") if f.suffix in (".mp4", ".webm", ".mkv")), None)
