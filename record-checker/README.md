@@ -6,7 +6,9 @@ A web page for **list staff** to check a record video. Paste a YouTube link: the
 - the **clicks** found in the sound, on a timeline of the whole video (clicks per second, one tick per click);
 - a **close-up of the sound** that follows the video, with the clicks, the ms between them and the video's frames;
 - **passages to check**: clicks too regular (a macro), very fast clicking, two clicks almost together;
-- the video's title, channel, upload date, fps and resolution.
+- the video's title, channel, upload date, fps and resolution;
+- a **standards checklist**, computed on the server after the download (about one minute per minute of video):
+  - **Cheat indicator** (common standard #2): finds the mod menu's indicator anywhere on the screen during the run (a small dot that stays greener or redder than its surroundings, even when it is translucent), follows its colour, and reads the dot(s) on the **end screen** (green, red, or green + red as in the staff guide). Close-ups of what was found are shown. It also says when no indicator or no end screen was found.
 
 The page is protected by a password. Videos are kept on the server (up to `CHECKER_MAX_GB`, oldest removed first), so a video opened twice is not downloaded again. Share a video with another staff member with the page's link (`…/?v=<YouTube id>`).
 

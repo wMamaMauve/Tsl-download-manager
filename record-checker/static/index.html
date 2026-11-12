@@ -32,6 +32,11 @@ canvas{width:100%;display:block;border-radius:8px;background:var(--bg);cursor:cr
 .tag.dbl{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}.t{font-variant-numeric:tabular-nums;min-width:70px}
 .legend{font-size:12.5px;color:var(--muted);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
 details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monospace;border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--bg)}
+.check{display:grid;grid-template-columns:28px 1fr;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--line)}.check:last-child{border-bottom:0}
+.check .ic{font-size:18px;line-height:1.4}.check ul{list-style:none;margin:2px 0 0;padding:0}.check li{font-size:14px;padding:2px 0}
+.check li.t{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}.check li.bad{color:var(--bad)}.check li.warn{color:var(--warn)}
+.shots{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}.shots figure{margin:0}.shots img{max-height:120px;border-radius:6px;border:1px solid var(--line);image-rendering:pixelated}
+.shots figcaption{font-size:12px;color:var(--muted)}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
 </style>
 </head>
@@ -59,6 +64,12 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
       <span class="time" id="time"></span>
     </div>
     <div class="legend">Keys: <kbd>Space</kbd> play/pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> one second · <kbd>1</kbd>–<kbd>4</kbd> speed</div>
+  </section>
+
+  <section>
+    <h2>Standards checklist <span class="muted" id="checkInfo"></span></h2>
+    <div id="checks"><div class="muted">Waiting for the analysis…</div></div>
+    <p class="hint" style="margin:8px 0 0">Automatic checks point at things to verify; they are not proof by themselves. Click a line with a time to see that moment.</p>
   </section>
 
   <section>
@@ -121,6 +132,7 @@ async function loadVideo(link) {
   }
   if (job.state === "error") return status("Could not get this video: " + job.error, true);
   S.id = job.id; S.meta = job.meta; S.fps = job.meta.fps || 60;
+  watchAnalysis(job);
   showMeta(job.meta);
   V.src = `/media/${job.id}/video.mp4`; V.playbackRate = 1; setRate(1);
   $("out").hidden = false;
@@ -136,9 +148,38 @@ async function loadVideo(link) {
   } catch (e) { status("Could not analyse the sound: " + (e.message || e), true); }
 }
 
+// ------------------------------------------------------------------ automatic checks (server side)
+let analysisTimer = null;
+async function watchAnalysis(job) {
+  clearTimeout(analysisTimer);
+  const id = job.id;
+  const a = job.analysis || {};
+  if (a.state === "done") return showChecks(id);
+  if (a.state === "error") { $("checks").innerHTML = `<div class="err">The analysis failed: ${esc(a.progress)}</div>`; $("checkInfo").textContent = ""; return; }
+  $("checkInfo").textContent = "(analysing…)";
+  $("checks").innerHTML = `<div class="muted">Analysing the video on the server: ${esc(a.progress || "starting")}… This takes about one minute per minute of video.</div>`;
+  analysisTimer = setTimeout(async () => { if (S.id !== id) return; try { watchAnalysis(await api("/api/job/" + id)); } catch (e) {} }, 2000);
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+async function showChecks(id) {
+  let r;
+  try { r = await (await fetch(`/media/${id}/analysis.json`)).json(); } catch (e) { $("checks").innerHTML = `<div class="err">Could not read the analysis.</div>`; return; }
+  if (S.id !== id) return;
+  const icon = { ok: "✅", warn: "⚠️", bad: "❌" };
+  const ci = r.cheatIndicator, shots = [];
+  for (const s of ci.ingame || []) if (s.image) shots.push([s.image, `in game at (${s.x}, ${s.y})`]);
+  if (ci.endscreen && ci.endscreen.image) shots.push([ci.endscreen.image, `end screen at ${fmt(ci.endscreen.at * 1000)}`]);
+  $("checks").innerHTML = `<div class="check"><div class="ic">${icon[ci.status] || "•"}</div><div><b>Cheat indicator</b>
+      <span class="hint">— standard: cheat indicators must be enabled (if a mod menu is used)</span>
+      <ul>${ci.lines.map(l => `<li class="${l.level}${l.t != null ? " t" : ""}" ${l.t != null ? `data-t="${l.t}"` : ""}>${l.t != null ? fmt(l.t * 1000) + " · " : ""}${esc(l.text)}</li>`).join("")}</ul>
+      ${shots.length ? `<div class="shots">${shots.map(([f, c]) => `<figure><img src="/media/${id}/${f}?v=${r.version}" alt="${esc(c)}"><figcaption>${esc(c)}</figcaption></figure>`).join("")}</div>` : ""}
+    </div></div>`;
+  $("checkInfo").textContent = `(${r.seconds} s of analysis)`;
+}
+$("checks").addEventListener("click", e => { const li = e.target.closest("li[data-t]"); if (li) { seek(Math.max(0, +li.dataset.t * 1000 - 300)); V.pause(); } });
+
 function showMeta(m) {
   const d = m.uploadDate ? `${m.uploadDate.slice(0, 4)}-${m.uploadDate.slice(4, 6)}-${m.uploadDate.slice(6, 8)}` : "?";
-  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   $("meta").innerHTML = `<div style="width:100%"><b style="font-size:17px"><a href="${esc(m.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(m.title)}</a></b></div>
     <span>Channel: <b>${m.channelUrl ? `<a href="${esc(m.channelUrl)}" target="_blank" rel="noopener">${esc(m.channel)}</a>` : esc(m.channel)}</b></span>
     <span>Uploaded <b>${d}</b></span><span><b>${fmt(m.duration * 1000)}</b> long</span><span><b>${m.fps}</b> fps</span>

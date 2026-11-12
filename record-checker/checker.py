@@ -26,6 +26,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+import analyze
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("record-checker")
 
@@ -74,8 +76,10 @@ STATIC = Path(__file__).with_name("static")
 VIDEOS = DATA_DIR / "videos"
 
 YT_ID = re.compile(r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/))([A-Za-z0-9_-]{11})")
-JOBS = {}          # video id -> {"state", "progress", "error", "meta"}
+JOBS = {}          # video id -> {"state", "progress", "error", "meta", "analysis"}
 DOWNLOADS = asyncio.Semaphore(2)
+ANALYSES = asyncio.Semaphore(1)     # the analysis uses the CPU: one video at a time
+MEDIA_FILES = {"video.mp4", "audio.flac", "analysis.json", "indicator_0.png", "indicator_1.png", "endscreen.png"}
 
 
 # --------------------------------------------------------------------------- login
@@ -242,11 +246,47 @@ async def prepare(vid):
             meta.write_text(json.dumps(data), encoding="utf-8")
             job.update(state="ready", progress="Ready", meta=data)
             log.info("ready: %s (%s, %.0f fps)", vid, data["title"], data["fps"])
+            start_analysis(vid)
         except Exception as e:   # shown on the page
             log.warning("could not prepare %s: %s", vid, e)
             job.update(state="error", error=str(e)[:500])
             shutil.rmtree(d, ignore_errors=True)
     cleanup()
+
+
+def analysis_done(vid):
+    f = paths(vid)[0] / "analysis.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8")).get("version") == analyze.VERSION
+    except (OSError, ValueError):
+        return False
+
+
+def start_analysis(vid):
+    """Runs the automatic checks in the background (once per video and analysis version)."""
+    job = JOBS[vid]
+    if analysis_done(vid):
+        job["analysis"] = {"state": "done", "progress": ""}
+        return
+    if (job.get("analysis") or {}).get("state") in ("waiting", "running"):
+        return
+    job["analysis"] = {"state": "waiting", "progress": "waiting for another video's analysis"}
+
+    async def go():
+        async with ANALYSES:
+            job["analysis"] = {"state": "running", "progress": "starting"}
+            d, video, _, _ = paths(vid)
+
+            def progress(text):
+                job["analysis"]["progress"] = text
+            try:
+                await asyncio.to_thread(analyze.run, video, d, progress)
+                job["analysis"] = {"state": "done", "progress": ""}
+                log.info("analysed: %s", vid)
+            except Exception as e:
+                log.exception("analysis of %s failed", vid)
+                job["analysis"] = {"state": "error", "progress": str(e)[:300]}
+    asyncio.create_task(go())
 
 
 def frac(text):
@@ -271,7 +311,8 @@ def job_of(vid):
     _, video, audio, meta = paths(vid)
     if video.exists() and audio.exists() and meta.exists():
         JOBS[vid] = {"state": "ready", "progress": "Ready", "error": None,
-                     "meta": json.loads(meta.read_text(encoding="utf-8"))}
+                     "meta": json.loads(meta.read_text(encoding="utf-8")), "analysis": None}
+        start_analysis(vid)
         return JOBS[vid]
     return None
 
@@ -284,10 +325,12 @@ async def api_load(request):
     vid = m.group(1)
     job = job_of(vid)
     if not job or job["state"] == "error":
-        JOBS[vid] = {"state": "working", "progress": "Starting", "error": None, "meta": None}
+        JOBS[vid] = {"state": "working", "progress": "Starting", "error": None, "meta": None, "analysis": None}
         asyncio.create_task(prepare(vid))
     else:
         os.utime(paths(vid)[0])   # recently used: removed last
+        if job["state"] == "ready":
+            start_analysis(vid)
     return web.json_response({"id": vid, **JOBS[vid]})
 
 
@@ -303,10 +346,13 @@ async def media(request):
     vid, kind = request.match_info["vid"], request.match_info["kind"]
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
         raise web.HTTPNotFound()
-    _, video, audio, _ = paths(vid)
-    f = {"video.mp4": video, "audio.flac": audio}.get(kind)
-    if not f or not f.exists():
+    if kind not in MEDIA_FILES:
         raise web.HTTPNotFound()
+    f = paths(vid)[0] / kind
+    if not f.exists():
+        raise web.HTTPNotFound()
+    if kind != "video.mp4" and kind != "audio.flac":   # analysis results change when the analysis is updated
+        return web.FileResponse(f, headers={"Cache-Control": "no-cache"})
     return web.FileResponse(f, headers={"Cache-Control": "private, max-age=86400"})   # supports Range (seeking)
 
 

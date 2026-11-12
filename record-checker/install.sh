@@ -11,10 +11,11 @@ if ! command -v python3 >/dev/null || ! python3 -c 'import venv, ensurepip' 2>/d
 fi
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q --upgrade aiohttp yt-dlp
+"$VENV/bin/pip" install -q --upgrade aiohttp yt-dlp numpy
 
 install -d /opt/record-checker/static /var/lib/record-checker
 install -m 755 "$SRC/checker.py" /opt/record-checker/checker.py
+install -m 755 "$SRC/analyze.py" /opt/record-checker/analyze.py
 install -m 644 "$SRC/static/index.html" /opt/record-checker/static/index.html
 
 if [ ! -f /etc/record-checker.conf ]; then
