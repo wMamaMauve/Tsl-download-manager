@@ -67,12 +67,6 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
   </section>
 
   <section>
-    <h2>Standards checklist <span class="muted" id="checkInfo"></span></h2>
-    <div id="checks"><div class="muted">Waiting for the analysis…</div></div>
-    <p class="hint" style="margin:8px 0 0">Automatic checks point at things to verify; they are not proof by themselves. Click a line with a time to see that moment.</p>
-  </section>
-
-  <section>
     <h2>Clicks <span class="muted" id="clickInfo"></span></h2>
     <canvas id="timeline" style="height:110px"></canvas>
     <div class="legend">The whole video: clicks per second, every click as a tick. Click to go there.<i style="background:var(--bad)"></i>too regular<i style="background:var(--warn)"></i>very fast</div>
@@ -82,6 +76,12 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
 
   <div class="stats" id="stats" style="margin-top:14px"></div>
 
+  <section>
+    <h2>Standards checklist <span class="muted" id="checkInfo"></span> <button class="small" id="bReanalyse" title="Delete the results and run all the automatic checks again">↺ Run the checks again</button></h2>
+    <div id="checks"><div class="muted">Waiting for the analysis…</div></div>
+    <p class="hint" style="margin:8px 0 0">Automatic checks point at things to verify; they are not proof by themselves. Click a line with a time to see that moment.</p>
+  </section>
+
   <div class="cols">
     <section><h2>Passages to check <span class="muted" id="nflags"></span></h2><ul class="flags" id="flags"></ul></section>
     <section><h2>Time between two clicks</h2><canvas id="hist" style="height:150px"></canvas>
@@ -90,6 +90,7 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
 
   <section>
     <details><summary>Click detection settings</summary>
+    <p style="margin:8px 0"><button class="small" id="bResetClicks" title="Back to the default settings and the whole video">↺ Reset the click analysis</button></p>
     <div class="controls">
       <div><label>Sensitivity <span class="val" id="vK"></span><input type="range" id="k" min="1.5" max="12" step="0.5" value="3"></label><span class="hint">Lower = more clicks found (and more false ones)</span></div>
       <div><label>Minimum time between two clicks <span class="val" id="vGap"></span><input type="range" id="gap" min="5" max="120" step="1" value="25"></label><span class="hint">Sounds closer than this count as one click</span></div>
@@ -396,6 +397,18 @@ function drawHist() {
 // ------------------------------------------------------------------ events
 $("loadForm").onsubmit = e => { e.preventDefault(); const u = $("url").value.trim(); if (u) loadVideo(u); };
 $("flags").onclick = e => { const li = e.target.closest("li[data-i]"); if (li) { seek(Math.max(0, S.flags[+li.dataset.i].t0 - 500)); V.play(); } };
+// default click settings, to reset the click analysis
+const DEFAULTS = Object.fromEntries(["k", "gap", "hp", "reg", "fast", "len"].map(id => [id, $(id).value]));
+$("bResetClicks").addEventListener("click", () => {
+  for (const [id, v] of Object.entries(DEFAULTS)) $(id).value = v;
+  $("from").value = 0; if (S.buf) $("to").value = S.buf.duration.toFixed(1);
+  for (const id of Object.keys(DEFAULTS)) $(id).dispatchEvent(new Event("input"));
+  S.hpDone = 0; if (S.buf) run();
+});
+$("bReanalyse").addEventListener("click", async () => {
+  if (!S.id || !confirm("Delete this video's automatic checks and run them again?")) return;
+  try { watchAnalysis(await api("/api/reanalyse/" + S.id, {})); } catch (e) { $("checks").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+});
 let deb; for (const id of ["k", "gap", "hp", "reg", "fast", "len", "from", "to"]) $(id).addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => S.buf && run(), 150); });
 window.addEventListener("resize", () => { if (S.env) render(); });
 const start = new URLSearchParams(location.search).get("v");

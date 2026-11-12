@@ -364,6 +364,24 @@ async def api_load(request):
     return web.json_response({"id": vid, **JOBS[vid]})
 
 
+async def api_reanalyse(request):
+    """Runs the automatic checks of a video again, from the start."""
+    vid = request.match_info["vid"]
+    job = job_of(vid) if VID_RE.fullmatch(vid) else None
+    if not job or job["state"] != "ready":
+        return web.json_response({"error": "The video is not ready"}, status=400)
+    if (job.get("analysis") or {}).get("state") in ("waiting", "running"):
+        return web.json_response({"id": vid, **job})
+    d = paths(vid)[0]
+    for name in MEDIA_FILES:
+        if name not in ("video.mp4", "audio.flac"):
+            (d / name).unlink(missing_ok=True)
+    job["analysis"] = None
+    start_analysis(vid)
+    log.info("analysis reset: %s", vid)
+    return web.json_response({"id": vid, **job})
+
+
 async def api_job(request):
     vid = request.match_info["vid"]
     job = job_of(vid)
@@ -399,6 +417,7 @@ def main():
     app.router.add_get("/", index)
     app.router.add_post("/api/load", api_load)
     app.router.add_get("/api/job/{vid}", api_job)
+    app.router.add_post("/api/reanalyse/{vid}", api_reanalyse)
     app.router.add_get("/media/{vid}/{kind}", media)
     log.info("Record Checker on http://%s:%d", HOST, PORT)
     web.run_app(app, host=HOST, port=PORT, print=None, access_log=None)
