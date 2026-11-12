@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 2   # bump when the analysis changes: older results are computed again
+VERSION = 3   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -316,6 +316,9 @@ def fmt(t):
 
 
 def cheat_indicator(path, outdir, progress):
+    w, h, _ = video_size(path)
+    ratio = w / h
+    filmed = abs(ratio - 16 / 9) > 0.15 and abs(ratio - 16 / 10) > 0.1 and abs(ratio - 4 / 3) > 0.08
     spots, regions, sample = scan_screen(path, progress)
     end = endscreen(path, progress)
     # close-ups for the staff to see what was found
@@ -364,9 +367,12 @@ def cheat_indicator(path, outdir, progress):
         else:
             lines.append({"level": "warn", "text": "End screen seen, but no indicator dot on it", "t": end["at"]})
     if not ind and not (end.get("seen") and end.get("dots")):
-        if labels:
+        if labels and not filmed:
             lines.append({"level": "bad", "text": f"No cheat indicator found, but {len(labels)} mod menu label(s) are on the screen (see below): the indicator is required", "t": None})
             status = "bad"
+        elif labels:
+            lines.append({"level": "warn", "text": "No cheat indicator found, and maybe mod menu labels (see below): check by eye", "t": None})
+            status = "warn" if status == "ok" else status
         else:
             lines.append({"level": "warn", "text": "No cheat indicator and no mod menu label found: vanilla game (exempt), or check by eye", "t": None})
             status = "warn" if status == "ok" else status
@@ -376,7 +382,11 @@ def cheat_indicator(path, outdir, progress):
         lines.append({"level": "warn", "text": "No end screen found in the video (the end stats must be visible)", "t": None})
         if status == "ok":
             status = "warn"
-    return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end, "labels": labels}
+    if filmed:
+        lines.insert(0, {"level": "warn", "text": f"The video is {w}×{h}: the screen looks filmed or cropped, so the automatic checks are less reliable. Check by eye.", "t": None})
+        if status == "ok":
+            status = "warn"
+    return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end, "labels": labels, "filmed": filmed}
 
 
 def run(video, outdir=None, progress=print):
