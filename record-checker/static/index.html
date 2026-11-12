@@ -91,7 +91,7 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
   <section>
     <details><summary>Click detection settings</summary>
     <div class="controls">
-      <div><label>Sensitivity <span class="val" id="vK"></span><input type="range" id="k" min="1.5" max="12" step="0.5" value="4"></label><span class="hint">Lower = more clicks found (and more false ones)</span></div>
+      <div><label>Sensitivity <span class="val" id="vK"></span><input type="range" id="k" min="1.5" max="12" step="0.5" value="3"></label><span class="hint">Lower = more clicks found (and more false ones)</span></div>
       <div><label>Minimum time between two clicks <span class="val" id="vGap"></span><input type="range" id="gap" min="5" max="120" step="1" value="25"></label><span class="hint">Sounds closer than this count as one click</span></div>
       <div><label>Ignore sounds below <span class="val" id="vHp"></span><input type="range" id="hp" min="500" max="10000" step="250" value="2500"></label><span class="hint">Clicks are high-pitched; the music is mostly lower</span></div>
       <div><label>Longest click sound <span class="val" id="vLen"></span><input type="range" id="len" min="2" max="60" step="1" value="10"></label><span class="hint" id="lenHint">Longer sounds (music, hit sounds) are ignored</span></div>
@@ -239,29 +239,40 @@ async function filtered(cut) {
   for (let m = 0; m < n; m++) { let mx = 0; const a = Math.floor(m * hop), b = Math.floor((m + 1) * hop); for (let i = a; i < b; i++) { const v = Math.abs(S.filtered[i]); if (v > mx) mx = v; } env[m] = mx; }
   S.env = env;
 }
-function soundLength(m) {
+// how long the sound lasts above the sound around it (music included): clicks last a few ms
+function soundLength(m, base) {
   const env = S.env; let peak = 0;
   for (let j = m; j < Math.min(env.length, m + 3); j++) peak = Math.max(peak, env[j]);
+  const thr = base + 0.25 * (peak - base);
   let below = 0, j = m;
-  for (; j < Math.min(env.length, m + 200); j++) { if (env[j] < 0.25 * peak) { if (++below >= 2) break; } else below = 0; }
+  for (; j < Math.min(env.length, m + 200); j++) { if (env[j] < thr) { if (++below >= 2) break; } else below = 0; }
   return j - m - below + 1;
 }
+// the sound level just before and just after (±20 ms, without the sound itself): a click stands out of it sharply,
+// a drum hit of the music does not (it lasts longer)
+function around(m) {
+  const env = S.env, v = [];
+  for (let j = Math.max(0, m - 20); j < m - 4; j++) v.push(env[j]);
+  for (let j = m + 6; j < Math.min(env.length, m + 22); j++) v.push(env[j]);
+  v.sort((a, b) => a - b); return (v[v.length >> 1] || 0) + 1e-9;
+}
 function detect(k, gap, fromMs, toMs, maxLen) {
-  const env = S.env, n = env.length, W = 150, pre = new Float64Array(n + 1);
-  for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + env[i];
+  const env = S.env, n = env.length;
   const sorted = Float32Array.from(env).sort(), floor = 0.04 * sorted[Math.floor(sorted.length * 0.999)] + 1e-6;
   const clicks = []; let last = -1e9; S.ignored = [];
   for (let m = Math.max(3, fromMs); m < Math.min(n, toMs); m++) {
-    const a = Math.max(0, m - W), b = Math.min(n, m + W), base = (pre[b] - pre[a]) / (b - a) + 1e-9, v = env[m];
-    if (v < floor || v < k * base) continue;
+    const v = env[m];
+    if (v < floor) continue;
     if (v < 1.6 * Math.max(env[m - 1], env[m - 2], env[m - 3])) continue;
     if (m - last < gap) continue;
-    const len = soundLength(m);
-    if (len > maxLen) { S.ignored.push(len); continue; }
     let peak = 0; for (let j = m; j < Math.min(n, m + 3); j++) peak = Math.max(peak, env[j]);
+    const base = around(m);
+    if (peak < k * base) continue;
+    const len = soundLength(m, base);
+    if (len > maxLen) { S.ignored.push(len); continue; }
     const s0 = Math.floor((m - 1) * S.sr / 1000), s1 = Math.floor((m + 3) * S.sr / 1000);
     let t = m; for (let i = s0; i < s1; i++) if (Math.abs(S.filtered[i]) >= 0.5 * peak) { t = i / S.sr * 1000; break; }
-    clicks.push({ t, strength: v / base, len }); last = m;
+    clicks.push({ t, strength: peak / base, len }); last = m;
   }
   return clicks;
 }
