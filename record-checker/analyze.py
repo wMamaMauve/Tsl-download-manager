@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 5   # bump when the analysis changes: older results are computed again
+VERSION = 6   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -435,6 +435,23 @@ def background_match(c, p):
     return e / max(energy, 1e-3), energy
 
 
+def background_far(c, p, k):
+    """background_match for images k apart: the background may have moved k times further."""
+    hc, mc = c; hp, mp = p; H, W = hc.shape; my, mx = 7 + 5 * k, 10 + 7 * k
+    best = None
+    for dy in range(-5 * k, 5 * k + 1):
+        for dx in range(-3 * k, 7 * k + 1):
+            a = (slice(my, H - my), slice(mx, W - mx)); b = (slice(my + dy, H - my + dy), slice(mx + dx, W - mx + dx))
+            m = mc[a] & mp[b]
+            if m.sum() < 1000:
+                continue
+            x, y = hc[a][m], hp[b][m]
+            v = float(np.abs(x - y).mean() / ((np.abs(x).mean() + np.abs(y).mean()) / 2))
+            if best is None or v < best:
+                best = v
+    return best
+
+
 def level_jump(a, b):
     """Phase correlation peak of the level's own motion: low when the image is a different place (a restart)."""
     la, lb = a.mean(-1), b.mean(-1)
@@ -466,9 +483,10 @@ def cuts(path, progress, fps=30):
             continue
         if found and t[i] - found[-1]["t"] < 1:
             continue
-        two = [f[20:220] for _, f in frames(path, fps, 240, start=max(0.0, t[i] - 1 / fps - 0.005), duration=2.2 / fps)][:2]
-        if len(two) < 2:
+        seven = [f[20:220] for _, f in frames(path, fps, 240, start=max(0.0, t[i] - 4 / fps - 0.005), duration=7.2 / fps)][:7]
+        if len(seven) < 7:
             continue
+        two = seven[3:5]                 # just before and at the jump
         (h0, m0), (h1, m1) = background(two[0]), background(two[1])
         if not m0.any() or not m1.any():
             continue
@@ -476,6 +494,11 @@ def cuts(path, progress, fps=30):
             continue      # the background changed colour (a color trigger), not place
         if level_jump(two[0], two[1]) < 0.08:
             continue      # a whole new picture: a restart after a death, a menu, a transition
+        bg = [background(f) for f in seven]
+        refs = [r for r in (background_far(bg[3], bg[0], 3), background_far(bg[3], bg[1], 2)) if r is not None]
+        after = background_far(bg[6], bg[3], 3)
+        if not refs or after is None or after < 1.35 * min(refs):
+            continue      # 3 images later the background lines up again: an animated effect, not a new place
         found.append({"t": round(float(t[i]), 2), "score": round(float(s[i]), 2), "usual": round(med, 2)})
     lines = [{"level": "warn", "t": c["t"],
               "text": f"The background jumps to another place while the level goes on ({c['score']} against {c['usual']} usually): possible cut or start position, check by eye frame by frame"}
