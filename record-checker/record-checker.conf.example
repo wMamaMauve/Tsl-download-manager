@@ -1,0 +1,15 @@
+# Record Checker configuration — /etc/record-checker.conf (chmod 600)
+
+# Password of the page (shared with the list staff). install.sh makes a random one.
+CHECKER_PASSWORD=""
+# Address and port the page listens on. 127.0.0.1 = only from the server itself
+# (open it through an SSH tunnel or a web server with HTTPS, see README.md).
+CHECKER_HOST="127.0.0.1"
+CHECKER_PORT=8099
+# 1 when the page is behind HTTPS (the login cookie is then only sent over HTTPS)
+CHECKER_SECURE_COOKIE=0
+# Downloaded videos: where, how much disk they may use (oldest removed first), quality, longest video
+CHECKER_DATA_DIR="/var/lib/record-checker"
+CHECKER_MAX_GB=10
+CHECKER_MAX_HEIGHT=720
+CHECKER_MAX_MINUTES=30

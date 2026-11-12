@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Record Checker</title>
+<style>
+:root{--bg:#f7f7fb;--fg:#15161c;--muted:#6b7080;--card:#fff;--line:#e3e5ee;--accent:#287dff;--warn:#e67e22;--bad:#e5484d;--ok:#22a06b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111318;--fg:#e8e9ef;--muted:#8b90a0;--card:#1a1d24;--line:#2a2e38;--accent:#5b9bff;--warn:#f0a050;--bad:#ff6b6f;--ok:#3ccf8e}}
+:root[data-theme="dark"]{--bg:#111318;--fg:#e8e9ef;--muted:#8b90a0;--card:#1a1d24;--line:#2a2e38;--accent:#5b9bff;--warn:#f0a050;--bad:#ff6b6f;--ok:#3ccf8e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1200px;margin:0 auto;padding:20px 16px 60px}h1{margin:0;font-size:24px}h2{font-size:16px;margin:0 0 10px}
+.muted{color:var(--muted)}section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-top:14px}
+.bar{display:flex;gap:8px;margin-top:12px}.bar input{flex:1;min-width:0}
+input[type=text],input[type=number]{font:inherit;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+input[type=number]{width:90px;padding:4px 8px}
+button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+#status{margin-top:10px}.err{color:var(--bad)}
+a{color:var(--accent)}.meta{display:flex;gap:6px 18px;flex-wrap:wrap;font-size:14px}.meta b{font-weight:600}
+video{width:100%;max-height:68vh;background:#000;border-radius:10px;display:block}
+.tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px}.tools .sep{width:1px;height:26px;background:var(--line);margin:0 4px}
+.time{font-variant-numeric:tabular-nums;font-size:14px;margin-left:auto}.small{font-size:13px;padding:5px 10px}
+canvas{width:100%;display:block;border-radius:8px;background:var(--bg);cursor:crosshair}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.stat{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}.stat span{font-size:12.5px;color:var(--muted)}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px 18px;margin-top:10px}.controls label{display:block;font-size:13px;color:var(--muted)}
+.controls input[type=range]{width:100%}.controls .val{float:right;color:var(--fg);font-variant-numeric:tabular-nums}.hint{font-size:12px;color:var(--muted)}
+.flags{list-style:none;margin:0;padding:0;max-height:320px;overflow:auto}.flags li{display:flex;gap:10px;align-items:baseline;padding:6px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+.flags li:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}.tag{font-size:12px;font-weight:700;padding:1px 8px;border-radius:99px;white-space:nowrap}
+.tag.reg{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}.tag.fast{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.tag.dbl{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}.t{font-variant-numeric:tabular-nums;min-width:70px}
+.legend{font-size:12.5px;color:var(--muted);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
+details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monospace;border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--bg)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+</style>
+</head>
+<body>
+<main>
+<h1>Record Checker</h1>
+<div class="muted">Paste the YouTube link of a record: the video is downloaded by the server, then shown here with frame-by-frame controls and its clicks.</div>
+<form class="bar" id="loadForm"><input type="text" id="url" placeholder="https://www.youtube.com/watch?v=…" aria-label="YouTube link" autocomplete="off"><button class="primary">Load</button></form>
+<div id="status" class="muted" role="status"></div>
+
+<div id="out" hidden>
+  <section>
+    <div class="meta" id="meta"></div>
+    <video id="video" playsinline preload="auto"></video>
+    <div class="tools">
+      <button class="small" id="bBack" title="Previous frame (← or ,)">◀ frame</button>
+      <button class="small" id="bPlay" title="Play / pause (Space)">▶ Play</button>
+      <button class="small" id="bFwd" title="Next frame (→ or .)">frame ▶</button>
+      <span class="sep"></span>
+      <span class="muted" style="font-size:13px">Speed</span>
+      <button class="small" data-rate="0.1">×0.1</button><button class="small" data-rate="0.25">×0.25</button>
+      <button class="small" data-rate="0.5">×0.5</button><button class="small" data-rate="1">×1</button>
+      <span class="sep"></span>
+      <button class="small" id="bMute">🔊 Sound</button>
+      <span class="time" id="time"></span>
+    </div>
+    <div class="legend">Keys: <kbd>Space</kbd> play/pause · <kbd>←</kbd> <kbd>→</kbd> one frame · <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> one second · <kbd>1</kbd>–<kbd>4</kbd> speed</div>
+  </section>
+
+  <section>
+    <h2>Clicks <span class="muted" id="clickInfo"></span></h2>
+    <canvas id="timeline" style="height:110px"></canvas>
+    <div class="legend">The whole video: clicks per second, every click as a tick. Click to go there.<i style="background:var(--bad)"></i>too regular<i style="background:var(--warn)"></i>very fast</div>
+    <canvas id="zoom" style="height:150px;margin-top:12px"></canvas>
+    <div class="legend">Close-up of the sound around the current image (follows the video). Lines: detected clicks, with the ms since the previous one. Light marks: the video's frames.</div>
+  </section>
+
+  <div class="stats" id="stats" style="margin-top:14px"></div>
+
+  <div class="cols">
+    <section><h2>Passages to check <span class="muted" id="nflags"></span></h2><ul class="flags" id="flags"></ul></section>
+    <section><h2>Time between two clicks</h2><canvas id="hist" style="height:150px"></canvas>
+      <div class="legend">0–400 ms. A human gives a wide hill; a macro gives very thin spikes.</div></section>
+  </div>
+
+  <section>
+    <details><summary>Click detection settings</summary>
+    <div class="controls">
+      <div><label>Sensitivity <span class="val" id="vK"></span><input type="range" id="k" min="1.5" max="12" step="0.5" value="4"></label><span class="hint">Lower = more clicks found (and more false ones)</span></div>
+      <div><label>Minimum time between two clicks <span class="val" id="vGap"></span><input type="range" id="gap" min="5" max="120" step="1" value="25"></label><span class="hint">Sounds closer than this count as one click</span></div>
+      <div><label>Ignore sounds below <span class="val" id="vHp"></span><input type="range" id="hp" min="500" max="10000" step="250" value="2500"></label><span class="hint">Clicks are high-pitched; the music is mostly lower</span></div>
+      <div><label>Longest click sound <span class="val" id="vLen"></span><input type="range" id="len" min="2" max="60" step="1" value="10"></label><span class="hint" id="lenHint">Longer sounds (music, hit sounds) are ignored</span></div>
+      <div><label>Part of the video</label><div><input type="number" id="from" min="0" step="0.1" value="0"> s → <input type="number" id="to" min="0" step="0.1"> s</div><span class="hint">Only the gameplay, e.g. without the intro</span></div>
+      <div><label>"Too regular" if the spread is under <span class="val" id="vReg"></span><input type="range" id="reg" min="0.5" max="6" step="0.25" value="2"></label><span class="hint">Spread of 8 intervals in a row, in ms</span></div>
+      <div><label>"Very fast" from <span class="val" id="vFast"></span><input type="range" id="fast" min="8" max="40" step="1" value="18"></label><span class="hint">Clicks per second, over 1 second</span></div>
+    </div></details>
+    <p class="hint" style="margin:10px 0 0">The click analysis points at moments to look at; it is not proof by itself. Music, hit sounds or a click-sounds mod can be counted as clicks. Always check the video.</p>
+  </section>
+</div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const S = { id: null, meta: null, fps: 60, buf: null, sr: 0, filtered: null, hpDone: 0, env: null, clicks: [], iv: [], flags: [], from: 0, to: 0, ignored: [] };
+const V = $("video");
+
+// ------------------------------------------------------------------ loading a video
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search); throw new Error("login"); }
+  const d = await r.json(); if (!r.ok) throw new Error(d.error || r.statusText); return d;
+}
+function status(text, err) { $("status").textContent = text; $("status").className = err ? "err" : "muted"; }
+
+async function loadVideo(link) {
+  status("Asking the server…"); $("out").hidden = true;
+  let job;
+  try { job = await api("/api/load", { url: link }); } catch (e) { return status(e.message, true); }
+  history.replaceState(null, "", "?v=" + job.id);
+  $("url").value = "https://www.youtube.com/watch?v=" + job.id;
+  while (job.state === "working") {
+    status(job.progress + "…");
+    await new Promise(r => setTimeout(r, 1000));
+    try { job = await api("/api/job/" + job.id); } catch (e) { return status(e.message, true); }
+  }
+  if (job.state === "error") return status("Could not get this video: " + job.error, true);
+  S.id = job.id; S.meta = job.meta; S.fps = job.meta.fps || 60;
+  showMeta(job.meta);
+  V.src = `/media/${job.id}/video.mp4`; V.playbackRate = 1; setRate(1);
+  $("out").hidden = false;
+  status("Analysing the sound…");
+  try {
+    const ab = await (await fetch(`/media/${job.id}/audio.flac`)).arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    S.buf = await ctx.decodeAudioData(ab); ctx.close();
+    S.sr = S.buf.sampleRate; S.hpDone = 0;
+    $("to").value = S.buf.duration.toFixed(1); $("from").value = 0;
+    await run();
+    status("");
+  } catch (e) { status("Could not analyse the sound: " + (e.message || e), true); }
+}
+
+function showMeta(m) {
+  const d = m.uploadDate ? `${m.uploadDate.slice(0, 4)}-${m.uploadDate.slice(4, 6)}-${m.uploadDate.slice(6, 8)}` : "?";
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  $("meta").innerHTML = `<div style="width:100%"><b style="font-size:17px"><a href="${esc(m.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(m.title)}</a></b></div>
+    <span>Channel: <b>${m.channelUrl ? `<a href="${esc(m.channelUrl)}" target="_blank" rel="noopener">${esc(m.channel)}</a>` : esc(m.channel)}</b></span>
+    <span>Uploaded <b>${d}</b></span><span><b>${fmt(m.duration * 1000)}</b> long</span><span><b>${m.fps}</b> fps</span>
+    <span><b>${m.width}×${m.height}</b></span>${m.views != null ? `<span><b>${Number(m.views).toLocaleString("en")}</b> views</span>` : ""}`;
+}
+
+// ------------------------------------------------------------------ player
+const frameOf = t => Math.floor(t * S.fps + 1e-6);
+function step(frames) { V.pause(); const f = frameOf(V.currentTime) + frames; V.currentTime = Math.max(0, (f + 0.5) / S.fps); }
+function setRate(r) { V.playbackRate = r; document.querySelectorAll("[data-rate]").forEach(b => b.setAttribute("aria-pressed", +b.dataset.rate === r)); }
+function fmt(ms) { const s = ms / 1000, m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(3).padStart(6, "0")}`; }
+function updateTime() { $("time").textContent = `${fmt(V.currentTime * 1000)} · frame ${frameOf(V.currentTime)}`; $("bPlay").textContent = V.paused ? "▶ Play" : "⏸ Pause"; }
+$("bBack").onclick = () => step(-1); $("bFwd").onclick = () => step(1);
+$("bPlay").onclick = () => V.paused ? V.play() : V.pause();
+$("bMute").onclick = () => { V.muted = !V.muted; $("bMute").textContent = V.muted ? "🔇 Muted" : "🔊 Sound"; };
+document.querySelectorAll("[data-rate]").forEach(b => b.onclick = () => setRate(+b.dataset.rate));
+document.addEventListener("keydown", e => {
+  if ($("out").hidden || e.target.matches("input, textarea")) return;
+  if (e.key === " ") { e.preventDefault(); V.paused ? V.play() : V.pause(); }
+  else if (e.key === "ArrowLeft" || e.key === ",") { e.preventDefault(); e.shiftKey ? (V.currentTime = Math.max(0, V.currentTime - 1)) : step(-1); }
+  else if (e.key === "ArrowRight" || e.key === ".") { e.preventDefault(); e.shiftKey ? (V.currentTime += 1) : step(1); }
+  else if (["1", "2", "3", "4"].includes(e.key)) setRate([0.1, 0.25, 0.5, 1][+e.key - 1]);
+});
+function seek(ms) { V.currentTime = Math.max(0, ms / 1000); }
+// redraw the playhead and the close-up while the video moves
+let lastDrawn = -1;
+(function loop() {
+  if (!$("out").hidden && V.currentTime !== lastDrawn) { lastDrawn = V.currentTime; updateTime(); if (S.env) { drawTimeline(); drawZoom(); } }
+  requestAnimationFrame(loop);
+})();
+V.addEventListener("play", updateTime); V.addEventListener("pause", updateTime);
+
+// ------------------------------------------------------------------ click detection (same as the Click Analyzer)
+async function filtered(cut) {
+  if (S.hpDone === cut) return;
+  const off = new OfflineAudioContext(1, S.buf.length, S.sr), src = off.createBufferSource(); src.buffer = S.buf;
+  let node = src;
+  for (let i = 0; i < 2; i++) { const f = off.createBiquadFilter(); f.type = "highpass"; f.frequency.value = cut; f.Q.value = 0.707; node.connect(f); node = f; }
+  node.connect(off.destination); src.start();
+  S.filtered = (await off.startRendering()).getChannelData(0); S.hpDone = cut;
+  const n = Math.floor(S.filtered.length / S.sr * 1000), env = new Float32Array(n), hop = S.sr / 1000;
+  for (let m = 0; m < n; m++) { let mx = 0; const a = Math.floor(m * hop), b = Math.floor((m + 1) * hop); for (let i = a; i < b; i++) { const v = Math.abs(S.filtered[i]); if (v > mx) mx = v; } env[m] = mx; }
+  S.env = env;
+}
+function soundLength(m) {
+  const env = S.env; let peak = 0;
+  for (let j = m; j < Math.min(env.length, m + 3); j++) peak = Math.max(peak, env[j]);
+  let below = 0, j = m;
+  for (; j < Math.min(env.length, m + 200); j++) { if (env[j] < 0.25 * peak) { if (++below >= 2) break; } else below = 0; }
+  return j - m - below + 1;
+}
+function detect(k, gap, fromMs, toMs, maxLen) {
+  const env = S.env, n = env.length, W = 150, pre = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + env[i];
+  const sorted = Float32Array.from(env).sort(), floor = 0.04 * sorted[Math.floor(sorted.length * 0.999)] + 1e-6;
+  const clicks = []; let last = -1e9; S.ignored = [];
+  for (let m = Math.max(3, fromMs); m < Math.min(n, toMs); m++) {
+    const a = Math.max(0, m - W), b = Math.min(n, m + W), base = (pre[b] - pre[a]) / (b - a) + 1e-9, v = env[m];
+    if (v < floor || v < k * base) continue;
+    if (v < 1.6 * Math.max(env[m - 1], env[m - 2], env[m - 3])) continue;
+    if (m - last < gap) continue;
+    const len = soundLength(m);
+    if (len > maxLen) { S.ignored.push(len); continue; }
+    let peak = 0; for (let j = m; j < Math.min(n, m + 3); j++) peak = Math.max(peak, env[j]);
+    const s0 = Math.floor((m - 1) * S.sr / 1000), s1 = Math.floor((m + 3) * S.sr / 1000);
+    let t = m; for (let i = s0; i < s1; i++) if (Math.abs(S.filtered[i]) >= 0.5 * peak) { t = i / S.sr * 1000; break; }
+    clicks.push({ t, strength: v / base, len }); last = m;
+  }
+  return clicks;
+}
+function analyse(clicks, regMs, fastCps) {
+  const iv = []; for (let i = 1; i < clicks.length; i++) iv.push(clicks[i].t - clicks[i - 1].t);
+  const flags = [], R = 8; let cur = null;
+  for (let i = 0; i + R <= iv.length; i++) {
+    const w = iv.slice(i, i + R);
+    if (Math.max(...w) > 300) { cur = null; continue; }
+    const mean = w.reduce((a, b) => a + b, 0) / R, sd = Math.sqrt(w.reduce((a, b) => a + (b - mean) ** 2, 0) / R);
+    if (sd < regMs) {
+      const t0 = clicks[i].t, t1 = clicks[i + R].t;
+      if (cur && t0 <= cur.t1) { cur.t1 = t1; cur.n = i + R - cur.i0 + 1; cur.sd = Math.min(cur.sd, sd); cur.means.push(mean); }
+      else { cur = { kind: "reg", t0, t1, i0: i, n: R + 1, sd, means: [mean] }; flags.push(cur); }
+    } else cur = null;
+  }
+  let j = 0, fcur = null; const fast = [];
+  for (let i = 0; i < clicks.length; i++) {
+    while (clicks[i].t - clicks[j].t > 1000) j++;
+    const c = i - j + 1;
+    if (c >= fastCps) { const t0 = clicks[j].t, t1 = clicks[i].t; if (fcur && t0 <= fcur.t1 + 50) { fcur.t1 = t1; fcur.max = Math.max(fcur.max, c); } else { fcur = { kind: "fast", t0, t1, max: c }; fast.push(fcur); } }
+  }
+  const dbl = []; for (let i = 0; i < iv.length; i++) if (iv[i] < 15) dbl.push({ kind: "dbl", t0: clicks[i].t, t1: clicks[i + 1].t, gap: iv[i] });
+  return { iv, flags: [...flags, ...fast, ...dbl].sort((a, b) => a.t0 - b.t0) };
+}
+function cpsSeries(clicks, t0, t1) {
+  const out = []; let a = 0, b = 0;
+  for (let t = t0; t <= t1; t += 100) { while (b < clicks.length && clicks[b].t <= t + 500) b++; while (a < clicks.length && clicks[a].t < t - 500) a++; out.push([t, b - a]); }
+  return out;
+}
+
+let busy = false, again = false;
+async function run() {
+  if (busy) { again = true; return; } busy = true;
+  try {
+    do {
+      again = false;
+      const k = +$("k").value, gap = +$("gap").value, hp = +$("hp").value, reg = +$("reg").value, fast = +$("fast").value, maxLen = +$("len").value;
+      $("vK").textContent = k; $("vGap").textContent = gap + " ms"; $("vHp").textContent = (hp / 1000).toFixed(2).replace(/\.?0+$/, "") + " kHz";
+      $("vLen").textContent = maxLen + " ms"; $("vReg").textContent = reg + " ms"; $("vFast").textContent = fast + " CPS";
+      const dur = S.buf.duration * 1000;
+      let from = Math.max(0, (+$("from").value || 0) * 1000), to = Math.min(dur, (+$("to").value || S.buf.duration) * 1000);
+      if (to <= from) to = dur;
+      await filtered(hp);
+      S.clicks = detect(k, gap, Math.floor(from), Math.ceil(to), maxLen);
+      const long = S.ignored.slice().sort((a, b) => a - b);
+      $("lenHint").textContent = long.length ? `${long.length} longer sudden sounds (usually ${long[long.length >> 1]} ms) were ignored` : "Longer sounds (music, hit sounds) are ignored";
+      const a = analyse(S.clicks, reg, fast); S.iv = a.iv; S.flags = a.flags; S.from = from; S.to = to;
+      S.series = cpsSeries(S.clicks, 0, dur);
+      render();
+    } while (again);
+  } finally { busy = false; }
+}
+
+function render() {
+  const c = S.clicks, iv = S.iv, span = (S.to - S.from) / 1000, maxCps = Math.max(0, ...S.series.map(x => x[1]));
+  const fastIv = iv.filter(x => x < 300), mean = fastIv.length ? fastIv.reduce((a, b) => a + b, 0) / fastIv.length : 0;
+  const sd = fastIv.length ? Math.sqrt(fastIv.reduce((a, b) => a + (b - mean) ** 2, 0) / fastIv.length) : 0, nReg = S.flags.filter(f => f.kind === "reg").length;
+  $("clickInfo").textContent = `(${c.length} found)`;
+  $("stats").innerHTML = [[c.length.toLocaleString("en"), "clicks found"], [(c.length / Math.max(span, 0.001)).toFixed(2), "clicks per second (average)"],
+    [maxCps, "most clicks in 1 second"], [iv.length ? Math.min(...iv).toFixed(1) + " ms" : "—", "shortest interval"],
+    [fastIv.length ? sd.toFixed(1) + " ms" : "—", "spread of the fast intervals"], [nReg, "too regular passages", nReg ? "var(--bad)" : "var(--ok)"]]
+    .map(([v, l, col]) => `<div class="stat"><b${col ? ` style="color:${col}"` : ""}>${v}</b><span>${l}</span></div>`).join("");
+  const label = f => f.kind === "reg" ? [`<span class="tag reg">too regular</span>`, `${f.n} clicks, about ${(f.means.reduce((a, b) => a + b, 0) / f.means.length).toFixed(1)} ms apart, spread only ${f.sd.toFixed(2)} ms`]
+    : f.kind === "fast" ? [`<span class="tag fast">very fast</span>`, `up to ${f.max} clicks in 1 second`] : [`<span class="tag dbl">almost together</span>`, `2 clicks ${f.gap.toFixed(1)} ms apart`];
+  $("nflags").textContent = `(${S.flags.length})`;
+  $("flags").innerHTML = S.flags.length ? S.flags.map((f, i) => { const [tag, txt] = label(f); return `<li data-i="${i}"><span class="t">${fmt(f.t0)}</span>${tag}<span>${txt}</span></li>`; }).join("")
+    : `<li class="muted" style="cursor:default">Nothing to flag with these settings.</li>`;
+  drawHist(); drawTimeline(); drawZoom();
+}
+
+// ------------------------------------------------------------------ drawing
+function canvas(id) {
+  const cv = $(id), dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h); g.font = "11px system-ui, sans-serif";
+  return { g, w, h };
+}
+function drawTimeline() {
+  const { g, w, h } = canvas("timeline"), dur = S.buf.duration * 1000, L = 28, B = 16, T = 6, X = t => L + t / dur * (w - L - 4);
+  const maxY = Math.max(5, ...S.series.map(s => s[1])) * 1.1, Y = v => T + (1 - v / maxY) * (h - T - B - 10);
+  for (const f of S.flags) { if (f.kind === "dbl") continue; g.fillStyle = f.kind === "reg" ? css("--bad") : css("--warn"); g.globalAlpha = 0.25; g.fillRect(X(f.t0), T, Math.max(2, X(f.t1) - X(f.t0)), h - T - B); }
+  g.globalAlpha = 0.12; g.fillStyle = css("--fg"); if (S.from > 0) g.fillRect(L, T, X(S.from) - L, h - T - B); if (S.to < dur) g.fillRect(X(S.to), T, w - 4 - X(S.to), h - T - B); g.globalAlpha = 1;
+  g.fillStyle = css("--muted"); g.fillText(Math.round(maxY / 1.1), 4, T + 9); g.fillText("0", 4, h - B - 10);
+  const stepX = [5, 10, 15, 30, 60, 120, 300].find(s => dur / 1000 / s <= 12) || 600;
+  for (let s = 0; s * 1000 <= dur; s += stepX) g.fillText(fmt(s * 1000).replace(/\.000$/, ""), X(s * 1000) - 12, h - 3);
+  g.strokeStyle = css("--accent"); g.lineWidth = 1.4; g.beginPath(); S.series.forEach(([t, v], i) => i ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v))); g.stroke();
+  g.fillStyle = css("--accent"); g.globalAlpha = 0.7; for (const c of S.clicks) g.fillRect(X(c.t), h - B - 8, 1, 7); g.globalAlpha = 1;
+  g.strokeStyle = css("--fg"); g.lineWidth = 1.5; g.beginPath(); g.moveTo(X(V.currentTime * 1000), 2); g.lineTo(X(V.currentTime * 1000), h - B); g.stroke();
+  $("timeline").onclick = e => { const r = $("timeline").getBoundingClientRect(); seek((e.clientX - r.left - L) / (w - L - 4) * dur); };
+}
+function drawZoom() {
+  const { g, w, h } = canvas("zoom"), now = V.currentTime * 1000, half = 750, t0 = Math.max(0, now - half), t1 = t0 + 2 * half, env = S.env, B = 16, T = 14, X = t => (t - t0) / (t1 - t0) * w;
+  // video frames
+  g.strokeStyle = css("--line"); g.lineWidth = 1;
+  const fd = 1000 / S.fps; if (w / (2 * half / fd) > 3) for (let f = Math.ceil(t0 / fd); f * fd <= t1; f++) { g.beginPath(); g.moveTo(X(f * fd), h - B); g.lineTo(X(f * fd), h - B - 6); g.stroke(); }
+  let mx = 1e-6; for (let m = Math.floor(t0); m < Math.min(env.length, t1); m++) mx = Math.max(mx, env[m]);
+  g.fillStyle = css("--muted"); g.globalAlpha = 0.55;
+  for (let m = Math.floor(t0); m < Math.min(env.length, t1); m++) { const v = env[m] / mx * (h - T - B - 8); g.fillRect(X(m), h - B - 8 - v, Math.max(1, w / (t1 - t0)), v); }
+  g.globalAlpha = 1;
+  const inReg = t => S.flags.some(f => f.kind === "reg" && t >= f.t0 && t <= f.t1);
+  for (let i = 0; i < S.clicks.length; i++) {
+    const c = S.clicks[i]; if (c.t < t0 || c.t > t1) continue;
+    g.strokeStyle = inReg(c.t) ? css("--bad") : css("--accent"); g.lineWidth = 1.5; g.beginPath(); g.moveTo(X(c.t), T); g.lineTo(X(c.t), h - B - 8); g.stroke();
+    if (i && X(c.t) - X(S.clicks[i - 1].t) > 26) { g.fillStyle = css("--fg"); g.fillText(Math.round(c.t - S.clicks[i - 1].t), X(c.t) - 20, T - 3); }
+  }
+  g.fillStyle = css("--muted"); for (let s = Math.ceil(t0 / 250) * 250; s <= t1; s += 250) g.fillText(fmt(s), X(s) - 20, h - 3);
+  g.strokeStyle = css("--fg"); g.lineWidth = 2; g.beginPath(); g.moveTo(X(now), 2); g.lineTo(X(now), h - B); g.stroke();
+  $("zoom").onclick = e => { const r = $("zoom").getBoundingClientRect(); seek(t0 + (e.clientX - r.left) / w * (t1 - t0)); };
+}
+function drawHist() {
+  const { g, w, h } = canvas("hist"), L = 26, B = 16, T = 6, MAX = 400, BIN = 2, bins = new Array(MAX / BIN).fill(0);
+  for (const v of S.iv) if (v < MAX) bins[Math.floor(v / BIN)]++;
+  const maxY = Math.max(1, ...bins), X = v => L + v / MAX * (w - L - 6), Y = v => T + (1 - v / maxY) * (h - T - B);
+  g.strokeStyle = css("--line"); g.fillStyle = css("--muted");
+  for (let v = 0; v <= MAX; v += 100) { g.beginPath(); g.moveTo(X(v), T); g.lineTo(X(v), h - B); g.stroke(); g.fillText(v + " ms", X(v) - 12, h - 3); }
+  g.fillText(maxY, 4, T + 8); g.fillStyle = css("--accent");
+  bins.forEach((c, i) => { if (c) g.fillRect(X(i * BIN), Y(c), Math.max(1, X(BIN) - X(0) - 0.5), h - B - Y(c)); });
+}
+
+// ------------------------------------------------------------------ events
+$("loadForm").onsubmit = e => { e.preventDefault(); const u = $("url").value.trim(); if (u) loadVideo(u); };
+$("flags").onclick = e => { const li = e.target.closest("li[data-i]"); if (li) { seek(Math.max(0, S.flags[+li.dataset.i].t0 - 500)); V.play(); } };
+let deb; for (const id of ["k", "gap", "hp", "reg", "fast", "len", "from", "to"]) $(id).addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => S.buf && run(), 150); });
+window.addEventListener("resize", () => { if (S.env) render(); });
+const start = new URLSearchParams(location.search).get("v");
+if (start) loadVideo(start);
+</script>
+</body>
+</html>

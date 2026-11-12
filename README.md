@@ -76,6 +76,10 @@ Run it again after a game update. Without these pictures, `/diff` works as befor
 
 Setup: `./install-bot.sh` (installs Python and discord.py), then fill in `DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID` in `/etc/tsl-sync.conf` (the steps are explained in the file) and run `systemctl restart tsl-bot`. Log: `journalctl -u tsl-bot -f`.
 
+## Record Checker (list staff)
+
+`record-checker/` is a web page for list staff: paste a record's YouTube link to watch it frame by frame, in slow motion, with its clicks on a timeline. See [record-checker/README.md](record-checker/README.md).
+
 ## Second bot: Extreme Demon Gacha
 
 `gacha-bot/` holds a separate Discord bot showing which demongacha.com cards the members of the TSL clan own (`/cards`, `/find`, `/missing`, `/clan`). See [gacha-bot/README.md](gacha-bot/README.md).
