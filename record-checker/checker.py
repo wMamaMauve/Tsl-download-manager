@@ -76,6 +76,27 @@ STATIC = Path(__file__).with_name("static")
 VIDEOS = DATA_DIR / "videos"
 
 YT_ID = re.compile(r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/))([A-Za-z0-9_-]{11})")
+MEDAL_ID = re.compile(r"medal\.tv/(?:[a-z]{2}(?:-[a-z]{2})?/)?(?:games/([^/?#&]+)/)?clips?/([A-Za-z0-9_-]+)")
+DRIVE_ID = re.compile(r"(?:drive|docs)\.google\.com/(?:file/d/|open\?(?:.*&)?id=|uc\?(?:.*&)?id=|.*[?&]id=)([A-Za-z0-9_-]{25,})")
+VID_RE = re.compile(r"[A-Za-z0-9_-]{11}|md_[A-Za-z0-9_-]{4,40}|gd_[A-Za-z0-9_-]{25,60}")
+
+
+def source(link):
+    """(video id used by the server, link given to yt-dlp, site) for a YouTube, Medal or Google Drive link."""
+    link = str(link or "").strip()
+    m = YT_ID.search(link)
+    if m:
+        return m.group(1), f"https://www.youtube.com/watch?v={m.group(1)}", "YouTube"
+    m = MEDAL_ID.search(link)
+    if m:
+        game = m.group(1) or "geometry-dash"
+        return "md_" + m.group(2), f"https://medal.tv/games/{game}/clips/{m.group(2)}", "Medal"
+    m = DRIVE_ID.search(link)
+    if m:
+        return "gd_" + m.group(1), f"https://drive.google.com/file/d/{m.group(1)}/view", "Google Drive"
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", link):
+        return link, f"https://www.youtube.com/watch?v={link}", "YouTube"
+    return None
 JOBS = {}          # video id -> {"state", "progress", "error", "meta", "analysis"}
 DOWNLOADS = asyncio.Semaphore(2)
 ANALYSES = asyncio.Semaphore(1)     # the analysis uses the CPU: one video at a time
@@ -183,11 +204,10 @@ def cleanup():
         log.info("removed %s (disk limit)", d.name)
 
 
-async def prepare(vid):
+async def prepare(vid, url, site):
     job = JOBS[vid]
     d, video, audio, meta = paths(vid)
     d.mkdir(parents=True, exist_ok=True)
-    url = f"https://www.youtube.com/watch?v={vid}"
     async with DOWNLOADS:
         try:
             job.update(state="working", progress="Reading the video's page", error=None)
@@ -195,7 +215,7 @@ async def prepare(vid):
                                   "-o", str(d / "info"), url)
             info_file = d / "info.info.json"
             if code != 0 or not info_file.exists():
-                raise RuntimeError(yt_error(out))
+                raise RuntimeError(yt_error(out, site))
             info = json.loads(info_file.read_text(encoding="utf-8"))
             info_file.unlink(missing_ok=True)
             if (info.get("duration") or 0) > MAX_MINUTES * 60:
@@ -215,7 +235,7 @@ async def prepare(vid):
                                   progress=dl_progress)
             got = next((f for f in d.glob("video.*") if f.suffix in (".mp4", ".webm", ".mkv")), None)
             if code != 0 or not got:
-                raise RuntimeError(yt_error(out))
+                raise RuntimeError(yt_error(out, site))
             if got.suffix != ".mp4":   # some videos only exist in VP9/AV1: put them in an mp4 box
                 job["progress"] = "Converting the video"
                 code, out = await run(FFMPEG, "-y", "-loglevel", "error", "-i", str(got), "-c", "copy", str(video))
@@ -237,7 +257,7 @@ async def prepare(vid):
             st = (probe.get("streams") or [{}])[0]
             fps = frac(st.get("avg_frame_rate")) or frac(st.get("r_frame_rate")) or info.get("fps") or 30
             data = {
-                "id": vid, "url": url, "title": info.get("title"), "channel": info.get("channel") or info.get("uploader"),
+                "id": vid, "url": url, "site": site, "title": info.get("title"), "channel": info.get("channel") or info.get("uploader"),
                 "channelUrl": info.get("channel_url") or info.get("uploader_url"),
                 "uploadDate": info.get("upload_date"), "duration": float((probe.get("format") or {}).get("duration") or info.get("duration") or 0),
                 "fps": round(fps, 3), "width": st.get("width"), "height": st.get("height"),
@@ -298,11 +318,15 @@ def frac(text):
         return None
 
 
-def yt_error(out):
+def yt_error(out, site="YouTube"):
     m = re.findall(r"ERROR: (.*)", out)
     msg = m[-1] if m else out[-300:]
     if "Sign in to confirm" in msg:
         msg += " (YouTube blocks this server: see the README to give yt-dlp cookies)"
+    elif site == "Google Drive" and re.search(r"(?i)403|404|access|permission|sign in|login|quota|not found", msg):
+        msg += " (the Drive file must be shared as \"Anyone with the link\"; a file downloaded too often today is blocked by Google for a while)"
+    elif site == "Medal" and re.search(r"(?i)403|404|private|not found|unable", msg):
+        msg += " (the Medal clip must be public)"
     return msg
 
 
@@ -320,14 +344,19 @@ def job_of(vid):
 
 async def api_load(request):
     data = await request.json()
-    m = YT_ID.search(str(data.get("url", ""))) or re.fullmatch(r"([A-Za-z0-9_-]{11})", str(data.get("url", "")).strip())
-    if not m:
-        return web.json_response({"error": "This is not a YouTube video link."}, status=400)
-    vid = m.group(1)
+    link = str(data.get("url", "")).strip()
+    src = source(link)
+    if not src and VID_RE.fullmatch(link) and job_of(link):     # a video already on the server (?v= in the page address)
+        src = (link, None, None)
+    if not src:
+        return web.json_response({"error": "This is not a YouTube, Medal or Google Drive video link."}, status=400)
+    vid, url, site = src
     job = job_of(vid)
     if not job or job["state"] == "error":
+        if not url:
+            return web.json_response({"error": "Paste the video link again."}, status=400)
         JOBS[vid] = {"state": "working", "progress": "Starting", "error": None, "meta": None, "analysis": None}
-        asyncio.create_task(prepare(vid))
+        asyncio.create_task(prepare(vid, url, site))
     else:
         os.utime(paths(vid)[0])   # recently used: removed last
         if job["state"] == "ready":
@@ -345,7 +374,7 @@ async def api_job(request):
 
 async def media(request):
     vid, kind = request.match_info["vid"], request.match_info["kind"]
-    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+    if not VID_RE.fullmatch(vid):
         raise web.HTTPNotFound()
     if kind not in MEDIA_FILES:
         raise web.HTTPNotFound()

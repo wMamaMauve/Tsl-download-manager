@@ -43,8 +43,8 @@ details>summary{cursor:pointer;font-weight:600}kbd{font:12px ui-monospace,monosp
 <body>
 <main>
 <h1>Record Checker</h1>
-<div class="muted">Paste the YouTube link of a record: the video is downloaded by the server, then shown here with frame-by-frame controls and its clicks.</div>
-<form class="bar" id="loadForm"><input type="text" id="url" placeholder="https://www.youtube.com/watch?v=…" aria-label="YouTube link" autocomplete="off"><button class="primary">Load</button></form>
+<div class="muted">Paste the link of a record (YouTube, Medal or Google Drive): the video is downloaded by the server, then shown here with frame-by-frame controls and its clicks.</div>
+<form class="bar" id="loadForm"><input type="text" id="url" placeholder="YouTube, Medal or Google Drive link" aria-label="Video link" autocomplete="off"><button class="primary">Load</button></form>
 <div id="status" class="muted" role="status"></div>
 
 <div id="out" hidden>
@@ -124,7 +124,7 @@ async function loadVideo(link) {
   let job;
   try { job = await api("/api/load", { url: link }); } catch (e) { return status(e.message, true); }
   history.replaceState(null, "", "?v=" + job.id);
-  $("url").value = "https://www.youtube.com/watch?v=" + job.id;
+  $("url").value = (job.meta && job.meta.url) || link;
   while (job.state === "working") {
     status(job.progress + "…");
     await new Promise(r => setTimeout(r, 1000));
@@ -196,7 +196,7 @@ $("checks").addEventListener("click", e => { const li = e.target.closest("li[dat
 function showMeta(m) {
   const d = m.uploadDate ? `${m.uploadDate.slice(0, 4)}-${m.uploadDate.slice(4, 6)}-${m.uploadDate.slice(6, 8)}` : "?";
   $("meta").innerHTML = `<div style="width:100%"><b style="font-size:17px"><a href="${esc(m.url)}" target="_blank" rel="noopener" style="color:inherit">${esc(m.title)}</a></b></div>
-    <span>Channel: <b>${m.channelUrl ? `<a href="${esc(m.channelUrl)}" target="_blank" rel="noopener">${esc(m.channel)}</a>` : esc(m.channel)}</b></span>
+    ${m.site && m.site !== "YouTube" ? `<span>From <b>${esc(m.site)}</b></span>` : ""}<span>${m.site === "Google Drive" ? "Owner" : "Channel"}: <b>${m.channelUrl ? `<a href="${esc(m.channelUrl)}" target="_blank" rel="noopener">${esc(m.channel || "?")}</a>` : esc(m.channel || "?")}</b></span>
     <span>Uploaded <b>${d}</b></span><span><b>${fmt(m.duration * 1000)}</b> long</span><span><b>${m.fps}</b> fps</span>
     <span><b>${m.width}×${m.height}</b></span>${m.views != null ? `<span><b>${Number(m.views).toLocaleString("en")}</b> views</span>` : ""}`;
 }

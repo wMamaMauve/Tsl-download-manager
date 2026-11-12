@@ -1,6 +1,6 @@
 # Record Checker
 
-A web page for **list staff** to check a record video. Paste a YouTube link: the server downloads the video (yt-dlp, up to 1080p60 and 13 Mbit/s), and the page shows it with:
+A web page for **list staff** to check a record video. Paste a YouTube, Medal or Google Drive link (Drive files must be shared as "Anyone with the link", Medal clips must be public): the server downloads the video (yt-dlp, up to 1080p60 and 13 Mbit/s), and the page shows it with:
 
 - **frame-by-frame** controls (`←` `→`), **slow motion** (×0.1 to ×1), frame number and exact time;
 - the **clicks** found in the sound, on a timeline of the whole video (clicks per second, one tick per click);
