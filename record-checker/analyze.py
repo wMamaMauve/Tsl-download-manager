@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 3   # bump when the analysis changes: older results are computed again
+VERSION = 4   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -389,6 +389,72 @@ def cheat_indicator(path, outdir, progress):
     return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end, "labels": labels, "filmed": filmed}
 
 
+def background_shift(a, ma, b, mb):
+    """How far the level background moved between two images (pixels, at 180p)."""
+    W = a.shape[1]
+    def err(dx, dy):
+        x = a[25:155, 45:W - 45]; y = b[25 + dy:155 + dy, 45 + dx:W - 45 + dx]
+        m = ma[25:155, 45:W - 45] & mb[25 + dy:155 + dy, 45 + dx:W - 45 + dx]
+        return float(np.abs(x - y)[m].mean()) if m.sum() >= 2000 else None
+    best = None
+    for dx in range(-6, 40):
+        e = err(dx, 0)
+        if e is not None and (best is None or e < best[0]):
+            best = (e, dx)
+    if best is None:
+        return None
+    for dx in (best[1] - 1, best[1], best[1] + 1):      # the background can also move a little up or down
+        for dy in (-2, -1, 1, 2):
+            e = err(dx, dy) if -6 <= dx < 40 else None
+            if e is not None and e < best[0]:
+                best = (e, dx)
+    return best[1]
+
+
+def cuts(path, progress, fps=30):
+    """Places where the background's movement rhythm changes while its speed stays the same.
+
+    In one recording the background moves with a fixed rhythm (for example 8, 11, 13, 8, 11, 13 pixels per image,
+    from the game's frame rate against the video's). Footage from another attempt, or from a start position, joins
+    with a different rhythm. Speed changes (portals) change the speed, not only the rhythm, and are ignored."""
+    _, _, dur = video_size(path)
+    dx, prev, prevm = [], None, None
+    for t, f in frames(path, fps, 180):
+        if len(dx) % (fps * 10) == 0:
+            progress(f"cuts {t:.0f}/{dur:.0f} s")
+        lum = f.mean(-1)
+        m = (lum > 35) & (lum < 170)          # background: not the black ground, not bright objects or outlines
+        if prev is not None:
+            v = background_shift(lum, m, prev, prevm)
+            dx.append(np.nan if v is None else v)
+        prev, prevm = lum, m
+    dx = np.array(dx, float)
+    n, k, H = len(dx), 9, fps // 2
+    u = np.full(n, np.nan)                    # unevenness of the movement over 9 images (0 = perfectly regular)
+    for i in range(n - k):
+        w = dx[i:i + k]
+        if np.isfinite(w).all() and w.mean() >= 3:
+            u[i] = w.std() / w.mean()
+    U = np.array([np.nanmedian(u[i:i + H]) if np.isfinite(u[i:i + H]).sum() > 8 else np.nan for i in range(0, n - H, H)])
+    found, w = [], 6                          # 3 s of steady rhythm on each side
+    stable = lambda x, m: (np.abs(x - m) <= 0.05).mean() >= 0.65
+    for i in range(w, len(U) - w - 1):
+        a, b = U[i - w:i], U[i + 1:i + 1 + w]
+        if not (np.isfinite(a).all() and np.isfinite(b).all()):
+            continue
+        ma, mb = float(np.median(a)), float(np.median(b))
+        if abs(ma - mb) >= 0.1 and max(ma, mb) >= 1.8 * min(ma, mb) and stable(a, ma) and stable(b, mb):
+            t = (i + 0.5) * H / fps + 1.0      # the 9-image window and the half-second blocks lag ~1 s behind
+            if not found or t - found[-1]["t"] > 3:
+                found.append({"t": round(t, 2), "before": round(ma, 2), "after": round(mb, 2)})
+    lines = [{"level": "warn", "t": c["t"],
+              "text": "The background changes rhythm at the same speed: possible cut or start position, check by eye (step frame by frame)"}
+             for c in found]
+    if not lines:
+        lines = [{"level": "ok", "t": None, "text": "No background rhythm change found (cuts can still hide where the background is still or hidden)"}]
+    return {"status": "warn" if found else "ok", "lines": lines, "cuts": found}
+
+
 def run(video, outdir=None, progress=print):
     video = Path(video)
     outdir = Path(outdir or video.parent)
@@ -396,6 +462,7 @@ def run(video, outdir=None, progress=print):
     global INGAME_FPS
     INGAME_FPS = 2 if video_size(video)[2] <= 240 else 1     # long videos: 1 image per second is enough
     result = {"version": VERSION, "cheatIndicator": cheat_indicator(video, outdir, progress)}
+    result["cuts"] = cuts(video, progress)
     result["seconds"] = round(time.time() - t0, 1)
     (outdir / "analysis.json").write_text(json.dumps(result), encoding="utf-8")
     return result
@@ -406,4 +473,6 @@ if __name__ == "__main__":
     ci = r["cheatIndicator"]
     print(f"{sys.argv[1]}: {ci['status']} ({r['seconds']} s)")
     for line in ci["lines"]:
+        print(f"  [{line['level']}] {line['text']}")
+    for line in r["cuts"]["lines"]:
         print(f"  [{line['level']}] {line['text']}")
