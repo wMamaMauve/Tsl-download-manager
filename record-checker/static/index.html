@@ -186,8 +186,8 @@ async function showChecks(id) {
       ${shotsHtml(labels.filter(l => l.image).map(l => [l.image, `still label at (${l.x0}, ${l.y0})`]))}
     </div></div>` + (r.cuts ? `
     <div class="check"><div class="ic">${icon[r.cuts.status] || "•"}</div><div><b>Cuts</b>
-      <span class="hint">— the background method: footage joined from another attempt or a start position moves with another rhythm</span>
-      <ul>${r.cuts.lines.map(l => `<li class="${l.level}${l.t != null ? " t" : ""}" ${l.t != null ? `data-t="${Math.max(0, l.t - 1.5)}"` : ""}>${l.t != null ? fmt(l.t * 1000) + " · " : ""}${esc(l.text)}</li>`).join("")}</ul>
+      <span class="hint">— the background method: footage joined from another attempt or a start position puts the background somewhere else</span>
+      <ul>${r.cuts.lines.map(l => `<li class="${l.level}${l.t != null ? " t" : ""}" ${l.t != null ? `data-t="${Math.max(0, l.t - 0.2)}"` : ""}>${l.t != null ? fmt(l.t * 1000) + " · " : ""}${esc(l.text)}</li>`).join("")}</ul>
     </div></div>` : "");
   $("checkInfo").textContent = `(${r.seconds} s of analysis)`;
 }

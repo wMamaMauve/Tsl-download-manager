@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 4   # bump when the analysis changes: older results are computed again
+VERSION = 5   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -389,69 +389,99 @@ def cheat_indicator(path, outdir, progress):
     return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end, "labels": labels, "filmed": filmed}
 
 
-def background_shift(a, ma, b, mb):
-    """How far the level background moved between two images (pixels, at 180p)."""
-    W = a.shape[1]
-    def err(dx, dy):
-        x = a[25:155, 45:W - 45]; y = b[25 + dy:155 + dy, 45 + dx:W - 45 + dx]
-        m = ma[25:155, 45:W - 45] & mb[25 + dy:155 + dy, 45 + dx:W - 45 + dx]
-        return float(np.abs(x - y)[m].mean()) if m.sum() >= 2000 else None
+def max_filter(a, r):
+    p = np.pad(a, r, mode="edge"); H, W = a.shape
+    o = np.max([p[r + d:r + d + H, r:r + W] for d in range(-r, r + 1)], 0)
+    p = np.pad(o, r, mode="edge")
+    return np.max([p[r:r + H, r + d:r + d + W] for d in range(-r, r + 1)], 0)
+
+
+def background(f):
+    """The faint lines of the level background (240p image): no objects, no ground, no outlines."""
+    lum = f.mean(-1)
+    hp = (lum - box_mean(lum, 4)).astype(np.float32)
+    return hp, (max_filter(np.abs(hp), 2) < 12) & (lum > 25) & (lum < 170)
+
+
+def background_match(c, p):
+    """How badly the background fails to continue from the previous image (about 0.7 normally, more after a jump).
+
+    The background scrolls slowly (parallax) and follows the camera up and down a little, so only small moves are
+    tried: a background that suddenly sits somewhere else does not match any of them."""
+    def err(dx, dy, M=(7, 10)):
+        hc, mc = c; hp, mp = p; H, W = hc.shape; my, mx = M
+        a = (slice(my, H - my), slice(mx, W - mx)); b = (slice(my + dy, H - my + dy), slice(mx + dx, W - mx + dx))
+        m = mc[a] & mp[b]
+        if m.sum() < 1300:
+            return None
+        x, y = hc[a][m], hp[b][m]
+        return float(np.abs(x - y).mean()), float((np.abs(x).mean() + np.abs(y).mean()) / 2)
     best = None
-    for dx in range(-6, 40):
-        e = err(dx, 0)
-        if e is not None and (best is None or e < best[0]):
-            best = (e, dx)
+    for dy in (-4, -2, 0, 2, 4):
+        for dx in (-2, 0, 2, 4, 6):
+            r = err(dx, dy)
+            if r and (best is None or r[0] < best[0][0]):
+                best = (r, dx, dy)
     if best is None:
         return None
-    for dx in (best[1] - 1, best[1], best[1] + 1):      # the background can also move a little up or down
-        for dy in (-2, -1, 1, 2):
-            e = err(dx, dy) if -6 <= dx < 40 else None
-            if e is not None and e < best[0]:
-                best = (e, dx)
-    return best[1]
+    _, bx, by = best
+    for dy in (by - 1, by, by + 1):
+        for dx in (bx - 1, bx, bx + 1):
+            if abs(dy) <= 5 and -3 <= dx <= 7:
+                r = err(dx, dy)
+                if r and r[0] < best[0][0]:
+                    best = (r, dx, dy)
+    (e, energy), _, _ = best
+    return e / max(energy, 1e-3), energy
+
+
+def level_jump(a, b):
+    """Phase correlation peak of the level's own motion: low when the image is a different place (a restart)."""
+    la, lb = a.mean(-1), b.mean(-1)
+    ha, hb = la - box_mean(la, 4), lb - box_mean(lb, 4)
+    w = np.outer(np.hanning(ha.shape[0]), np.hanning(ha.shape[1]))
+    F = np.fft.fft2(hb * w) * np.conj(np.fft.fft2(ha * w)); F /= np.abs(F) + 1e-6
+    return float(np.real(np.fft.ifft2(F)).max())
 
 
 def cuts(path, progress, fps=30):
-    """Places where the background's movement rhythm changes while its speed stays the same.
-
-    In one recording the background moves with a fixed rhythm (for example 8, 11, 13, 8, 11, 13 pixels per image,
-    from the game's frame rate against the video's). Footage from another attempt, or from a start position, joins
-    with a different rhythm. Speed changes (portals) change the speed, not only the rhythm, and are ignored."""
+    """The background method of the staff guide: in one attempt the background scrolls smoothly; footage joined
+    from another attempt (or a start position) puts it somewhere else from one image to the next."""
     _, _, dur = video_size(path)
-    dx, prev, prevm = [], None, None
-    for t, f in frames(path, fps, 180):
-        if len(dx) % (fps * 10) == 0:
+    rows, prev = [], None
+    for t, f in frames(path, fps, 240):
+        if len(rows) % (fps * 10) == 0:
             progress(f"cuts {t:.0f}/{dur:.0f} s")
-        lum = f.mean(-1)
-        m = (lum > 35) & (lum < 170)          # background: not the black ground, not bright objects or outlines
+        c = background(f[20:220])
         if prev is not None:
-            v = background_shift(lum, m, prev, prevm)
-            dx.append(np.nan if v is None else v)
-        prev, prevm = lum, m
-    dx = np.array(dx, float)
-    n, k, H = len(dx), 9, fps // 2
-    u = np.full(n, np.nan)                    # unevenness of the movement over 9 images (0 = perfectly regular)
-    for i in range(n - k):
-        w = dx[i:i + k]
-        if np.isfinite(w).all() and w.mean() >= 3:
-            u[i] = w.std() / w.mean()
-    U = np.array([np.nanmedian(u[i:i + H]) if np.isfinite(u[i:i + H]).sum() > 8 else np.nan for i in range(0, n - H, H)])
-    found, w = [], 6                          # 3 s of steady rhythm on each side
-    stable = lambda x, m: (np.abs(x - m) <= 0.05).mean() >= 0.65
-    for i in range(w, len(U) - w - 1):
-        a, b = U[i - w:i], U[i + 1:i + 1 + w]
-        if not (np.isfinite(a).all() and np.isfinite(b).all()):
+            r = background_match(c, prev)
+            if r:
+                rows.append((t, r[0], r[1]))
+        prev = c
+    t = np.array([r[0] for r in rows]); s = np.array([r[1] for r in rows]); e = np.array([r[2] for r in rows])
+    found = []
+    for i in range(len(s)):
+        med = float(np.median(np.r_[s[max(0, i - 15):i], s[i + 1:i + 16]]))
+        if med < 0.3 or e[i] < 1.0 or s[i] < 1.2 or s[i] < 1.6 * med:
             continue
-        ma, mb = float(np.median(a)), float(np.median(b))
-        if abs(ma - mb) >= 0.1 and max(ma, mb) >= 1.8 * min(ma, mb) and stable(a, ma) and stable(b, mb):
-            t = (i + 0.5) * H / fps + 1.0      # the 9-image window and the half-second blocks lag ~1 s behind
-            if not found or t - found[-1]["t"] > 3:
-                found.append({"t": round(t, 2), "before": round(ma, 2), "after": round(mb, 2)})
+        if found and t[i] - found[-1]["t"] < 1:
+            continue
+        two = [f[20:220] for _, f in frames(path, fps, 240, start=max(0.0, t[i] - 1 / fps - 0.005), duration=2.2 / fps)][:2]
+        if len(two) < 2:
+            continue
+        (h0, m0), (h1, m1) = background(two[0]), background(two[1])
+        if not m0.any() or not m1.any():
+            continue
+        if np.abs(two[1][m1].mean(0) - two[0][m0].mean(0)).max() >= 10:
+            continue      # the background changed colour (a color trigger), not place
+        if level_jump(two[0], two[1]) < 0.08:
+            continue      # a whole new picture: a restart after a death, a menu, a transition
+        found.append({"t": round(float(t[i]), 2), "score": round(float(s[i]), 2), "usual": round(med, 2)})
     lines = [{"level": "warn", "t": c["t"],
-              "text": "The background changes rhythm at the same speed: possible cut or start position, check by eye (step frame by frame)"}
+              "text": f"The background jumps to another place while the level goes on ({c['score']} against {c['usual']} usually): possible cut or start position, check by eye frame by frame"}
              for c in found]
     if not lines:
-        lines = [{"level": "ok", "t": None, "text": "No background rhythm change found (cuts can still hide where the background is still or hidden)"}]
+        lines = [{"level": "ok", "t": None, "text": "The background scrolls without a jump (a cut can still hide where the background is hidden or plain)"}]
     return {"status": "warn" if found else "ok", "lines": lines, "cuts": found}
 
 
