@@ -13,10 +13,11 @@ fi
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q --upgrade aiohttp yt-dlp numpy
 
-install -d /opt/record-checker/static /var/lib/record-checker
+install -d /opt/record-checker/static /opt/record-checker/backgrounds /var/lib/record-checker
 install -m 755 "$SRC/checker.py" /opt/record-checker/checker.py
 install -m 755 "$SRC/analyze.py" /opt/record-checker/analyze.py
 install -m 644 "$SRC/static/index.html" /opt/record-checker/static/index.html
+install -m 644 "$SRC"/backgrounds/*.png /opt/record-checker/backgrounds/
 
 if [ ! -f /etc/record-checker.conf ]; then
     install -m 600 "$SRC/record-checker.conf.example" /etc/record-checker.conf

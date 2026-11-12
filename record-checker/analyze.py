@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 6   # bump when the analysis changes: older results are computed again
+VERSION = 7   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -461,9 +461,116 @@ def level_jump(a, b):
     return float(np.real(np.fft.ifft2(F)).max())
 
 
+BACKGROUNDS = Path(__file__).with_name("backgrounds")   # game backgrounds, 512 px = 2048 px of the UHD texture
+_textures = {}
+
+
+def texture(name, height):
+    """High-passed background texture at the size it has in a `height`-pixel video (1 UHD pixel = 1 pixel in 1080p)."""
+    key = (name, height)
+    if key not in _textures:
+        n = int(round(2048 * height / 1080))
+        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(BACKGROUNDS / name), "-vf", f"scale={n}:{n}:flags=bicubic",
+                              "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
+        t = np.frombuffer(raw, np.uint8).reshape(n, n).astype(np.float32)
+        _textures[key] = t - box_mean(t, 4)
+    return _textures[key]
+
+
+def texture_search(hp, m, T, x0=None, y0=None, r=12):
+    """Where the frame's background lines sit on the texture: (x, y, confidence 0..1).
+
+    The texture repeats sideways. Without a guess the whole texture is searched; with one, only around it."""
+    H, W = hp.shape; N, P = T.shape
+    TT = np.tile(T, (1, int(np.ceil((P + W + 2 * r) / P)) + 1))
+    if x0 is None:
+        win, ox, oy = TT[:, :P + W], 0, 0
+    else:
+        ylo, yhi = max(0, y0 - r), min(N, y0 + r + H)
+        xs = (x0 - r) % P
+        win, ox, oy = TT[ylo:yhi, xs:xs + W + 2 * r], xs, ylo
+    if win.shape[0] < H:
+        return None
+    big = win.shape
+    fm = np.zeros(big, np.float32); fm[:H, :W] = hp * m
+    mm = np.zeros(big, np.float32); mm[:H, :W] = m
+    F = np.fft.rfft2
+    cc = lambda a, b: np.fft.irfft2(np.conj(F(a)) * F(b), big)[:big[0] - H + 1, :big[1] - W + 1]
+    c = cc(fm, win) / np.sqrt(np.maximum(cc(mm, win * win), 1e-6) * float((fm * fm).sum()))
+    y, x = np.unravel_index(np.argmax(c), c.shape)
+    return int((ox + x) % P), int(oy + y), float(c[y, x])
+
+
+def background_track(path, progress, fps=30, height=240, sure=0.38):
+    """The staff guide's background method with the game's own background: its exact place in every image.
+
+    Returns None when the video's background is not one we have."""
+    _, _, dur = video_size(path)
+    names = sorted(p.name for p in BACKGROUNDS.glob("bg_*.png")) if BACKGROUNDS.is_dir() else []
+    if not names or dur < 2:
+        return None
+    # which background? a few images spread over the video
+    samples = [f[20:220] for i, (_, f) in enumerate(frames(path, 10 / dur, height)) if i < 12]
+    best = None
+    for name in names:
+        T = texture(name, height)
+        confs = sorted((r[2] for r in (texture_search(*background(f), T) for f in samples if background(f)[1].sum() >= 2000) if r), reverse=True)
+        score = confs[2] if len(confs) >= 3 else 0
+        if score >= sure and (best is None or score > best[1]):
+            best = (name, score)
+    if best is None:
+        return None
+    T = texture(best[0], height); P = T.shape[1]
+    track, pos, vx = [], None, 0
+    for t, f in frames(path, fps, height):
+        if len(track) % (fps * 10) == 0:
+            progress(f"background {t:.0f}/{dur:.0f} s")
+        hp, m = background(f[20:220])
+        if m.sum() < 2000:
+            track.append((t, None)); pos = None; continue
+        r = texture_search(hp, m, T, pos[0] + vx, pos[1]) if pos else None
+        if r is None or r[2] < 0.3:
+            r = texture_search(hp, m, T)
+        if r and r[2] >= 0.3:
+            if pos:
+                vx = int(round(((r[0] - pos[0] + P // 2) % P - P // 2 + vx) / 2))
+            pos = r[:2]
+        else:
+            pos = None
+        track.append((t, r))
+    found = []
+    ok = [i for i, (_, r) in enumerate(track) if r and r[2] >= 0.3]
+    for a, b in zip(ok, ok[1:]):
+        if b != a + 1:
+            continue
+        (_, p), (t, q) = track[a], track[b]
+        dx = (q[0] - p[0] + P // 2) % P - P // 2; dy = q[1] - p[1]
+        if abs(dx) < 20 or min(p[2], q[2]) < sure:
+            continue        # moves along (or a camera move up/down), or not sure enough of the place
+        nxt = [track[i][1] for i in range(b + 1, min(len(track), b + 6))]
+        if not all(n and n[2] >= 0.3 and abs((n[0] - q[0] + P // 2) % P - P // 2) <= 12 * (k + 1) for k, n in enumerate(nxt)):
+            continue        # the new place does not hold: a mismatch, not a jump
+        found.append({"t": round(float(t), 2), "dx": int(dx), "dy": int(dy)})
+    seen = sum(1 for _, r in track if r and r[2] >= sure)
+    return {"background": best[0], "seen": round(seen / max(len(track), 1), 2), "jumps": found}
+
+
 def cuts(path, progress, fps=30):
     """The background method of the staff guide: in one attempt the background scrolls smoothly; footage joined
     from another attempt (or a start position) puts it somewhere else from one image to the next."""
+    bt = background_track(path, progress)
+    if bt:
+        num = bt["background"][3:-4].lstrip("0")
+        def jump(j):
+            move = f"{abs(j['dx'])} px {'left' if j['dx'] < 0 else 'right'}"
+            if abs(j["dy"]) > 2:
+                move += f" and {abs(j['dy'])} px {'up' if j['dy'] < 0 else 'down'}"
+            return f"Background {num} jumps {move} from one image to the next and goes on from there: cut or start position, check by eye frame by frame"
+        lines = [{"level": "warn", "t": j["t"], "text": jump(j)} for j in bt["jumps"]]
+        if not lines:
+            lines = [{"level": "ok", "t": None,
+                      "text": f"Background {num} recognised and followed on {round(bt['seen'] * 100)}% of the images: it never jumps"}]
+        return {"status": "warn" if bt["jumps"] else "ok", "lines": lines, "cuts": bt["jumps"], "method": "texture", "background": bt["background"]}
     _, _, dur = video_size(path)
     rows, prev = [], None
     for t, f in frames(path, fps, 240):
