@@ -169,10 +169,21 @@ async function showChecks(id) {
   const ci = r.cheatIndicator, shots = [];
   for (const s of ci.ingame || []) if (s.image) shots.push([s.image, `in game at (${s.x}, ${s.y})`]);
   if (ci.endscreen && ci.endscreen.image) shots.push([ci.endscreen.image, `end screen at ${fmt(ci.endscreen.at * 1000)}`]);
+  const shotsHtml = list => list.length ? `<div class="shots">${list.map(([f, c]) => `<figure><img src="/media/${id}/${f}?v=${r.version}" alt="${esc(c)}"><figcaption>${esc(c)}</figcaption></figure>`).join("")}</div>` : "";
+  const labels = ci.labels || [];
+  const modIcon = labels.length || (ci.ingame || []).length ? "ℹ️" : "•";
+  const modText = labels.length
+    ? `${labels.length} text label(s) stay still on the screen while the game moves: usually a mod menu's labels (FPS, CPS, attempts, clock…). Check them against the allowed mods.`
+    : (ci.ingame || []).length ? "No still text label found, but the cheat indicator shows that a mod menu is used." : "No still text label found (vanilla game, or labels too faint to be found).";
   $("checks").innerHTML = `<div class="check"><div class="ic">${icon[ci.status] || "•"}</div><div><b>Cheat indicator</b>
       <span class="hint">— standard: cheat indicators must be enabled (if a mod menu is used)</span>
       <ul>${ci.lines.map(l => `<li class="${l.level}${l.t != null ? " t" : ""}" ${l.t != null ? `data-t="${l.t}"` : ""}>${l.t != null ? fmt(l.t * 1000) + " · " : ""}${esc(l.text)}</li>`).join("")}</ul>
-      ${shots.length ? `<div class="shots">${shots.map(([f, c]) => `<figure><img src="/media/${id}/${f}?v=${r.version}" alt="${esc(c)}"><figcaption>${esc(c)}</figcaption></figure>`).join("")}</div>` : ""}
+      ${shotsHtml(shots)}
+    </div></div>
+    <div class="check"><div class="ic">${modIcon}</div><div><b>Mod menu traces</b>
+      <span class="hint">— standard: disable all prohibited mods</span>
+      <ul><li>${esc(modText)}</li></ul>
+      ${shotsHtml(labels.filter(l => l.image).map(l => [l.image, `still label at (${l.x0}, ${l.y0})`]))}
     </div></div>`;
   $("checkInfo").textContent = `(${r.seconds} s of analysis)`;
 }

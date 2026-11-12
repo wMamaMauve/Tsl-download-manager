@@ -79,7 +79,8 @@ YT_ID = re.compile(r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|liv
 JOBS = {}          # video id -> {"state", "progress", "error", "meta", "analysis"}
 DOWNLOADS = asyncio.Semaphore(2)
 ANALYSES = asyncio.Semaphore(1)     # the analysis uses the CPU: one video at a time
-MEDIA_FILES = {"video.mp4", "audio.flac", "analysis.json", "indicator_0.png", "indicator_1.png", "endscreen.png"}
+MEDIA_FILES = {"video.mp4", "audio.flac", "analysis.json", "indicator_0.png", "indicator_1.png", "endscreen.png",
+               "label_0.png", "label_1.png", "label_2.png", "label_3.png"}
 
 
 # --------------------------------------------------------------------------- login

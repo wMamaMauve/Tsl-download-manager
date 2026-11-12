@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = 1   # bump when the analysis changes: older results are computed again
+VERSION = 2   # bump when the analysis changes: older results are computed again
 INGAME_FPS = 2
 
 
@@ -123,44 +123,105 @@ def excess(f):
     return ge, re
 
 
-def ingame_indicator(path, progress, fps=None, thr=9):
+def edges(lum):
+    gx = np.abs(np.diff(lum, axis=1, prepend=lum[:, :1]))
+    gy = np.abs(np.diff(lum, axis=0, prepend=lum[:1, :]))
+    return np.maximum(gx, gy) > 18
+
+
+def scan_screen(path, progress, fps=None, thr=9):
+    """Two passes over the video at 720p, keeping only running totals (low memory):
+    1. where pixels are often greener / redder than around (indicator), and where outlines stay
+       in place (mod menu labels);
+    2. the indicator candidates' colour over time, and which outlines are really unchanged."""
     fps = fps or INGAME_FPS
-    fl = []
+    n = 0
+    cg = cr = edge_n = lum_sum = None
     for t, f in frames(path, fps, 720):
-        fl.append((t, f))
-        if len(fl) % 20 == 0:
-            progress(f"cheat indicator: reading the video ({t:.0f} s)")
-    if not fl:
-        return []
-    n = len(fl)
-    cg = np.zeros(fl[0][1].shape[:2], np.int32)
-    cr = np.zeros_like(cg)
-    for i, (t, f) in enumerate(fl):
         ge, re = excess(f)
+        lum = f.mean(-1)
+        if cg is None:
+            cg, cr = np.zeros(lum.shape, np.int32), np.zeros(lum.shape, np.int32)
+            edge_n, lum_sum = np.zeros(lum.shape, np.int32), np.zeros(lum.shape, np.float64)
         cg += ge > thr
         cr += re > thr
-        if i % 40 == 0:
-            progress(f"cheat indicator: looking for it ({100 * i // n}%)")
+        edge_n += edges(lum)
+        lum_sum += lum
+        n += 1
+        if n % 20 == 0:
+            progress(f"screen check 1/2 ({t:.0f} s)")
+    if not n:
+        return [], [], None
     cand = (np.maximum(cg, cr) >= 0.35 * n) | ((cg + cr) >= 0.5 * n)
     cand[0, :] = cand[-1, :] = cand[:, 0] = cand[:, -1] = False
-    spots = []
-    for cy, cx, size in components(cand, 3, 120):
-        y, x = int(round(cy)), int(round(cx))
-        tl = []
-        for t, f in fl:
+    spots = [{"x": int(round(cx)), "y": int(round(cy)), "size": size, "tl": []} for cy, cx, size in components(cand, 3, 120)]
+    lum_mean = lum_sum / n
+    still_n = np.zeros(lum_mean.shape, np.int32)
+    sample = None
+    for i, (t, f) in enumerate(frames(path, fps, 720)):
+        lum = f.mean(-1)
+        still_n += edges(lum) & (np.abs(lum - lum_mean) < 12)
+        if i == n // 2:
+            sample = f.astype(np.uint8)
+        for s in spots:
+            x, y = s["x"], s["y"]
             y0, x0 = max(0, y - 9), max(0, x - 9)
             ge, re = excess(f[y0:y + 10, x0:x + 10])
             yy, xx = y - y0, x - x0
             g0, r0 = ge[yy - 1:yy + 2, xx - 1:xx + 2].mean(), re[yy - 1:yy + 2, xx - 1:xx + 2].mean()
-            tl.append("G" if g0 > thr * 0.7 and g0 > r0 else "R" if r0 > thr * 0.7 else ".")
-        # a close-up of the spot, from an image where it is clearly visible
-        best = next((i for i, c in enumerate(tl) if c != "."), 0)
-        spots.append({"x": x, "y": y, "size": size, "timeline": "".join(tl), "fps": fps,
-                      "green": tl.count("G"), "red": tl.count("R"), "none": tl.count("."),
-                      "_frame": fl[best][1], "_t": fl[best][0]})
-    # most consistent first
+            c = "G" if g0 > thr * 0.7 and g0 > r0 else "R" if r0 > thr * 0.7 else "."
+            s["tl"].append(c)
+            if c != "." and "_crop" not in s:   # a close-up where the dot is visible
+                s["_crop"], s["_t"] = f[max(0, y - 25):y + 25, max(0, x - 45):x + 45].astype(np.uint8), t
+        if i % 20 == 0:
+            progress(f"screen check 2/2 ({t:.0f} s)")
+    for s in spots:
+        tl = s.pop("tl")
+        s.update(timeline="".join(tl), fps=fps, green=tl.count("G"), red=tl.count("R"), none=tl.count("."))
     spots.sort(key=lambda s: -(s["green"] + s["red"]))
-    return spots
+    # outlines present and unchanged in most images (or present while translucent): still overlays
+    still = (still_n > 0.4 * n) | (edge_n > 0.6 * n)
+    return spots, still_regions(still), sample
+
+
+def still_regions(still):
+    """Groups of 8x8 cells with still outlines -> [(x0, y0, x1, y1, cells)], classified."""
+    H, W = still.shape
+    cells = still[:H // 8 * 8, :W // 8 * 8].reshape(H // 8, 8, W // 8, 8).sum((1, 3)) >= 4
+    ch, cw = cells.shape
+    seen = np.zeros_like(cells)
+    regs = []
+    for y0, x0 in zip(*np.nonzero(cells)):
+        if seen[y0, x0]:
+            continue
+        st, pts = [(y0, x0)], []
+        seen[y0, x0] = True
+        while st:
+            y, x = st.pop()
+            pts.append((y, x))
+            for yy in range(y - 1, y + 2):
+                for xx in range(x - 2, x + 3):
+                    if 0 <= yy < ch and 0 <= xx < cw and cells[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        st.append((yy, xx))
+        if len(pts) >= 3:
+            a = np.array(pts)
+            regs.append([int(a[:, 1].min() * 8), int(a[:, 0].min() * 8), int((a[:, 1].max() + 1) * 8), int((a[:, 0].max() + 1) * 8), len(pts)])
+    bar = next((r for r in regs if r[3] <= 56 and r[0] < W * 0.62 and r[2] > W * 0.38 and r[2] - r[0] > W * 0.25), None)
+    out = []
+    for x0, y0, x1, y1, c in regs:
+        if (x0, y0, x1, y1, c) == tuple(bar or ()):
+            kind = "progress bar"
+        elif y0 >= H - 100 and x1 - x0 > W * 0.3:
+            kind = "ground"
+        elif y1 - y0 <= 8:
+            kind = "line"
+        elif y1 <= 64 and ((bar and x0 >= bar[0] - 80 and x1 <= bar[2] + 220) or (not bar and x0 < W * 0.62 and x1 > W * 0.38)):
+            kind = "percentage"
+        else:
+            kind = "label"
+        out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "cells": c, "kind": kind})
+    return out
 
 
 # --------------------------------------------------------------------------- end screen
@@ -222,29 +283,30 @@ def endscreen(path, progress):
             groups[-1][1] = t
         else:
             groups.append([t, t])
-    seen = []
+    seen = []        # (time, dots)
+    reps = {}        # dots -> (time, image, box): one image per pattern, after its first 2 appearances
     for t0, t1 in groups:
         progress(f"end screen: reading {t0:.0f}–{t1:.0f} s")
         start = max(0.0, t0 - 0.5)
         for t, f in frames(path, 15, 720, start=start, duration=t1 - start + 1.5):
             box = endscreen_box(f)
             if box:
-                seen.append((t, endscreen_dots(f, box), f, box))
+                d = endscreen_dots(f, box)
+                seen.append((t, d))
+                if sum(1 for _, x in seen if x == d) in (1, 3):
+                    reps[d] = (t, f.astype(np.uint8), box)
     if not seen:
         return {"seen": False}
-    # the dots seen on at least 3 images (0.2 s), the most frequent first
     counts = {}
-    for t, d, f, box in seen:
-        counts.setdefault(d, []).append((t, f, box))
-    stable = sorted(((d, v) for d, v in counts.items() if len(v) >= 3 and d), key=lambda kv: -len(kv[1]))
+    for t, d in seen:
+        counts[d] = counts.get(d, 0) + 1
+    # the dots seen on at least 3 images (0.2 s), the most frequent first
+    stable = sorted((d for d, c in counts.items() if c >= 3 and d), key=lambda d: -counts[d])
     res = {"seen": True, "start": round(seen[0][0], 2), "end": round(seen[-1][0], 2),
-           "patterns": {d or "-": len(v) for d, v in counts.items()}}
-    if stable:
-        d, v = stable[0]
-        res.update(dots=d, frames=len(v), at=round(v[len(v) // 2][0], 2), _frame=v[len(v) // 2][1], _box=v[len(v) // 2][2])
-    else:
-        t, d, f, box = seen[len(seen) // 2]
-        res.update(dots="", frames=0, at=round(t, 2), _frame=f, _box=box)
+           "patterns": {d or "-": c for d, c in counts.items()}}
+    d = stable[0] if stable else max(counts, key=counts.get)
+    t, f, box = reps[d]
+    res.update(dots=d if stable else "", frames=counts[d] if stable else 0, at=round(t, 2), _frame=f, _box=box)
     return res
 
 
@@ -254,21 +316,21 @@ def fmt(t):
 
 
 def cheat_indicator(path, outdir, progress):
-    spots = ingame_indicator(path, progress)
+    spots, regions, sample = scan_screen(path, progress)
     end = endscreen(path, progress)
-    images = {}
     # close-ups for the staff to see what was found
-    for i, s in enumerate(spots[:2]):
-        f = s.pop("_frame")
-        t = s.pop("_t")
-        y0, x0 = max(0, s["y"] - 25), max(0, s["x"] - 45)
-        name = f"indicator_{i}.png"
-        save_png(f[y0:s["y"] + 25, x0:s["x"] + 45], outdir / name, zoom=4)
-        images[name] = f"in game at {fmt(t)}"
-        s["image"] = name
-    for s in spots[2:]:
-        s.pop("_frame", None)
-        s.pop("_t", None)
+    for i, s in enumerate(spots):
+        crop, t = s.pop("_crop", None), s.pop("_t", None)
+        if i < 2 and crop is not None:
+            name = f"indicator_{i}.png"
+            save_png(crop, outdir / name, zoom=4)
+            s["image"], s["imageTime"] = name, t
+    labels = sorted((r for r in regions if r["kind"] == "label"), key=lambda r: -r["cells"])[:4]
+    for i, r in enumerate(labels):
+        if sample is not None:
+            name = f"label_{i}.png"
+            save_png(sample[max(0, r["y0"] - 4):r["y1"] + 4, max(0, r["x0"] - 4):r["x1"] + 4], outdir / name, zoom=2)
+            r["image"] = name
     if end.get("seen"):
         f, box = end.pop("_frame"), end.pop("_box")
         x0, x1, y0, y1 = endscreen_corner(f, box)
@@ -302,15 +364,19 @@ def cheat_indicator(path, outdir, progress):
         else:
             lines.append({"level": "warn", "text": "End screen seen, but no indicator dot on it", "t": end["at"]})
     if not ind and not (end.get("seen") and end.get("dots")):
-        lines.append({"level": "warn", "text": "No cheat indicator found. Required if a mod menu is used (vanilla is exempt): check by eye", "t": None})
-        status = "warn" if status == "ok" else status
+        if labels:
+            lines.append({"level": "bad", "text": f"No cheat indicator found, but {len(labels)} mod menu label(s) are on the screen (see below): the indicator is required", "t": None})
+            status = "bad"
+        else:
+            lines.append({"level": "warn", "text": "No cheat indicator and no mod menu label found: vanilla game (exempt), or check by eye", "t": None})
+            status = "warn" if status == "ok" else status
     elif status == "ok" and any(l["level"] == "warn" for l in lines):
         status = "warn"
     if not end.get("seen"):
         lines.append({"level": "warn", "text": "No end screen found in the video (the end stats must be visible)", "t": None})
         if status == "ok":
             status = "warn"
-    return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end}
+    return {"status": status, "lines": lines, "ingame": spots[:3], "endscreen": end, "labels": labels}
 
 
 def run(video, outdir=None, progress=print):
